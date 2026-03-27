@@ -19,13 +19,7 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(true);
   const [deleteDialog, setDeleteDialog] = useState(null);
 
-  useEffect(() => {
-    if (!authLoading && (!user || user.role !== 'admin')) { navigate('/'); return; }
-    if (!user) return;
-    loadData();
-  }, [user, authLoading]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const [s, u, sub] = await Promise.all([
         api.get('/admin/stats'), api.get('/admin/users'), api.get('/admin/subscriptions'),
@@ -33,7 +27,13 @@ export default function AdminPanel() {
       setStats(s.data); setUsers(u.data); setSubs(sub.data);
     } catch { toast.error('Failed to load admin data'); }
     finally { setLoading(false); }
-  };
+  }, [api]);
+
+  useEffect(() => {
+    if (!authLoading && (!user || user.role !== 'admin')) { navigate('/'); return; }
+    if (!user) return;
+    loadData();
+  }, [user, authLoading, navigate, loadData]);
 
   const deleteUser = async (userId) => {
     try {
