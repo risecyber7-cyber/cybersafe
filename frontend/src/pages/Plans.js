@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { API_BASE } from '@/lib/config';
+import { API_BASE, SUPPORT_EMAIL } from '@/lib/config';
 
 const API = API_BASE;
 
@@ -18,7 +18,7 @@ export default function Plans() {
   const [plans, setPlans] = useState([
     { id: 'live-class', name: 'Live Classes', price: 500, currency: 'INR', period: 'month', features: ['Live interactive sessions', 'Real-time Q&A', 'Hands-on labs', 'Certificate of completion', 'Discord community access'], popular: true },
     { id: 'recorded-class', name: 'Recorded Classes', price: 299, currency: 'INR', period: 'month', features: ['Self-paced learning', 'HD video lectures', 'Downloadable resources', 'Practice exercises', 'Lifetime access'] },
-    { id: 'free-demo', name: 'Free Demo (7 days)', price: 0, currency: 'INR', period: '7 days', features: ['Access to 3 demo classes', 'Preview of all courses', 'Limited lab access', 'Email support'], note: 'For gokali.pro subscribers: Send subscription screenshot to risecyber7@gmail.com for free 7-day demo access.' },
+    { id: 'free-demo', name: 'Free Demo (7 days)', price: 0, currency: 'INR', period: '7 days', features: ['Access to 3 demo classes', 'Preview of all courses', 'Limited lab access', 'Email support'], note: `For gokali.pro subscribers: Send subscription screenshot to ${SUPPORT_EMAIL} for free 7-day demo access.` },
   ]);
   const [showDialog, setShowDialog] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -123,9 +123,9 @@ export default function Plans() {
           <Mail className="w-8 h-8 text-[#00D4FF] mx-auto mb-4" />
           <h3 className="text-xl font-bold font-['Orbitron'] mb-2">Have a gokali.pro subscription?</h3>
           <p className="text-[#8B949E] mb-4 max-w-md mx-auto">
-            Send a screenshot of your active gokali.pro subscription to <span className="text-[#00D4FF] font-mono">risecyber7@gmail.com</span> and get <b className="text-white">7 days free demo access</b> to all classes!
+            Send a screenshot of your active gokali.pro subscription to <span className="text-[#00D4FF] font-mono">{SUPPORT_EMAIL}</span> and get <b className="text-white">7 days free demo access</b> to all classes!
           </p>
-          <a href="mailto:risecyber7@gmail.com?subject=Free Demo Request - gokali.pro subscriber" data-testid="gokali-email-link">
+          <a href={`mailto:${SUPPORT_EMAIL}?subject=Free Demo Request - gokali.pro subscriber`} data-testid="gokali-email-link">
             <Button className="bg-[#00D4FF] text-black font-bold hover:bg-[#00B8E6] rounded-sm">
               <Mail className="w-4 h-4 mr-2" /> Send Email
             </Button>

@@ -124,6 +124,7 @@ This repository is configured for a single Vercel project from the repo root:
 - `JWT_SECRET`
 - `CORS_ORIGINS`
 - `FRONTEND_URL`
+- `SUPPORT_EMAIL`
 - `EMERGENT_LLM_KEY`
 - `GMAIL_EMAIL`
 - `GMAIL_APP_PASSWORD`
@@ -135,6 +136,8 @@ This repository is configured for a single Vercel project from the repo root:
 
 - `REACT_APP_BACKEND_URL`
   Leave empty when frontend and backend are deployed in the same Vercel project.
+- `REACT_APP_SUPPORT_EMAIL`
+- `REACT_APP_SSH_HOST`
 - `SSH_HOST`
 - `SSH_USER`
 - `SSH_PASSWORD`

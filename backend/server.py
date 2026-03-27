@@ -31,7 +31,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # JWT Config
-JWT_SECRET = os.environ.get('JWT_SECRET', 'fallback-secret')
+JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 
 # Password hashing
@@ -41,6 +41,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 GMAIL_EMAIL = os.environ.get('GMAIL_EMAIL', '')
 GMAIL_APP_PASSWORD = os.environ.get('GMAIL_APP_PASSWORD', '')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '').rstrip('/')
+SUPPORT_EMAIL = os.environ.get('SUPPORT_EMAIL', GMAIL_EMAIL).strip()
 
 # SSH config
 SSH_HOST = os.environ.get('SSH_HOST', '')
@@ -56,6 +57,10 @@ def frontend_url() -> str:
         prefix = '' if vercel_url.startswith('http') else 'https://'
         return f"{prefix}{vercel_url}".rstrip('/')
     return 'http://localhost:3000'
+
+
+def support_email() -> str:
+    return SUPPORT_EMAIL or 'support@example.com'
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -466,7 +471,7 @@ async def get_dashboard_history(user=Depends(get_current_user)):
 PLANS = [
     {"id": "live-class", "name": "Live Classes", "price": 500, "currency": "INR", "period": "month", "features": ["Live interactive sessions", "Real-time Q&A", "Hands-on labs", "Certificate of completion", "Discord community access"], "popular": True},
     {"id": "recorded-class", "name": "Recorded Classes", "price": 299, "currency": "INR", "period": "month", "features": ["Self-paced learning", "HD video lectures", "Downloadable resources", "Practice exercises", "Lifetime access"]},
-    {"id": "free-demo", "name": "Free Demo (7 days)", "price": 0, "currency": "INR", "period": "7 days", "features": ["Access to 3 demo classes", "Preview of all courses", "Limited lab access", "Email support"], "note": "For gokali.pro subscribers: Send subscription screenshot to risecyber7@gmail.com for free 7-day demo access."},
+    {"id": "free-demo", "name": "Free Demo (7 days)", "price": 0, "currency": "INR", "period": "7 days", "features": ["Access to 3 demo classes", "Preview of all courses", "Limited lab access", "Email support"], "note": f"For gokali.pro subscribers: Send subscription screenshot to {support_email()} for free 7-day demo access."},
 ]
 
 @api_router.get("/plans")
@@ -527,9 +532,12 @@ async def admin_stats(user=Depends(require_admin)):
 @app.on_event("startup")
 async def seed_data():
     # Seed admin account
-    admin_username = os.environ.get('ADMIN_USERNAME', 'admin')
-    admin_password = os.environ.get('ADMIN_PASSWORD', 'admin123')
-    admin_email = os.environ.get('ADMIN_EMAIL', 'admin@cyberguard.io')
+    admin_username = os.environ.get('ADMIN_USERNAME', '').strip()
+    admin_password = os.environ.get('ADMIN_PASSWORD', '').strip()
+    admin_email = os.environ.get('ADMIN_EMAIL', '').strip()
+    if not all([admin_username, admin_password, admin_email]):
+        logger.warning("Admin seed skipped. Set ADMIN_USERNAME, ADMIN_PASSWORD, and ADMIN_EMAIL.")
+        return
     existing_admin = await db.users.find_one({"username": admin_username})
     if not existing_admin:
         admin_doc = {

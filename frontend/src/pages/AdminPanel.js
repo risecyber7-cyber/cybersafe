@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { BACKEND_URL, IS_VERCEL } from '@/lib/config';
+import { BACKEND_URL, IS_VERCEL, SSH_HOST_LABEL } from '@/lib/config';
 
 export default function AdminPanel() {
   const { user, api, token, loading: authLoading } = useAuth();
@@ -327,7 +327,7 @@ function SSHTerminal({ token }) {
           <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
           <div className="w-2.5 h-2.5 rounded-full bg-yellow-500" />
           <div className="w-2.5 h-2.5 rounded-full bg-[#00D4FF]" />
-          <span className="text-xs text-[#8B949E] ml-2 font-mono">ssh://azureuser@20.244.12.203</span>
+          <span className="text-xs text-[#8B949E] ml-2 font-mono">ssh://{SSH_HOST_LABEL}</span>
         </div>
         <div ref={termRef} className="min-h-[400px] bg-[#050505]" />
         {!connected && !connecting && (

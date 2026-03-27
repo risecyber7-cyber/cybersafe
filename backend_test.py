@@ -3,10 +3,13 @@
 import requests
 import sys
 import json
+import os
 from datetime import datetime
 
 class CyberGuardAPITester:
-    def __init__(self, base_url="https://cyberguard-hub-4.preview.emergentagent.com/api"):
+    def __init__(self, base_url=None):
+        if base_url is None:
+            base_url = os.environ.get("API_BASE_URL", "http://localhost:8000/api")
         self.base_url = base_url
         self.token = None
         self.admin_token = None
