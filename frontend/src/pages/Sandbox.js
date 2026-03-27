@@ -5,6 +5,7 @@ import { FlaskConical, Send, Lightbulb, ArrowLeft, CheckCircle, XCircle, Loader2
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
+import { API_BASE } from '@/lib/config';
 
 const DIFFICULTY_COLORS = { Easy: 'bg-[#00D4FF]/20 text-[#00D4FF]', Medium: 'bg-yellow-500/20 text-yellow-400', Hard: 'bg-red-500/20 text-red-400' };
 
@@ -20,8 +21,7 @@ export default function Sandbox() {
   const [showHint, setShowHint] = useState(false);
 
   useEffect(() => {
-    const API_URL = `${process.env.REACT_APP_BACKEND_URL}/api`;
-    fetch(`${API_URL}/sandbox/challenges`).then(r => r.json()).then(setChallenges).catch(() => {});
+    fetch(`${API_BASE}/sandbox/challenges`).then(r => r.json()).then(setChallenges).catch(() => {});
   }, []);
 
   const submit = async () => {

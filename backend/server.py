@@ -40,11 +40,22 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # Email config
 GMAIL_EMAIL = os.environ.get('GMAIL_EMAIL', '')
 GMAIL_APP_PASSWORD = os.environ.get('GMAIL_APP_PASSWORD', '')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', '').rstrip('/')
 
 # SSH config
 SSH_HOST = os.environ.get('SSH_HOST', '')
 SSH_USER = os.environ.get('SSH_USER', '')
 SSH_PASSWORD = os.environ.get('SSH_PASSWORD', '')
+
+
+def frontend_url() -> str:
+    if FRONTEND_URL:
+        return FRONTEND_URL
+    vercel_url = os.environ.get('VERCEL_PROJECT_PRODUCTION_URL') or os.environ.get('VERCEL_URL')
+    if vercel_url:
+        prefix = '' if vercel_url.startswith('http') else 'https://'
+        return f"{prefix}{vercel_url}".rstrip('/')
+    return 'http://localhost:3000'
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -206,7 +217,7 @@ async def signup(data: UserCreate):
         html = f"""<div style="font-family:Arial;padding:20px;background:#0A0A0A;color:#fff;">
         <h2 style="color:#00FF66;">Welcome to CyberGuard!</h2>
         <p>Hi {data.username}, verify your email by clicking below:</p>
-        <a href="https://cyberguard-hub-4.preview.emergentagent.com/verify-email/{verification_token}" style="display:inline-block;padding:12px 24px;background:#00FF66;color:#000;text-decoration:none;font-weight:bold;">Verify Email</a>
+        <a href="{frontend_url()}/verify-email/{verification_token}" style="display:inline-block;padding:12px 24px;background:#00FF66;color:#000;text-decoration:none;font-weight:bold;">Verify Email</a>
         <p style="color:#888;margin-top:20px;">If you didn't create this account, ignore this email.</p></div>"""
         asyncio.create_task(send_email(data.email, "Verify your CyberGuard account", html))
 
@@ -254,7 +265,7 @@ async def forgot_password(data: ForgotPasswordRequest):
         html = f"""<div style="font-family:Arial;padding:20px;background:#0A0A0A;color:#fff;">
         <h2 style="color:#00FF66;">Password Reset</h2>
         <p>You requested a password reset for your CyberGuard account.</p>
-        <a href="https://cyberguard-hub-4.preview.emergentagent.com/reset-password/{reset_token}" style="display:inline-block;padding:12px 24px;background:#00FF66;color:#000;text-decoration:none;font-weight:bold;">Reset Password</a>
+        <a href="{frontend_url()}/reset-password/{reset_token}" style="display:inline-block;padding:12px 24px;background:#00FF66;color:#000;text-decoration:none;font-weight:bold;">Reset Password</a>
         <p style="color:#888;margin-top:20px;">This link expires in 1 hour. If you didn't request this, ignore this email.</p></div>"""
         asyncio.create_task(send_email(data.email, "CyberGuard Password Reset", html))
     return {"message": "If the email exists, a reset link has been sent."}

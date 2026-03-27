@@ -103,12 +103,40 @@ git push -u origin main
 
 ## Vercel Deployment
 
-Deploy the `frontend/` directory as the Vercel project root.
+This repository is configured for a single Vercel project from the repo root:
 
-- Framework preset: `Create React App`
-- Root directory: `frontend`
-- Build command: `yarn build`
-- Output directory: `build`
-- Environment variable: `REACT_APP_BACKEND_URL=<your-backend-url>`
+- React frontend is built from `frontend/`
+- FastAPI backend is served from `/api`
+- Client-side routes fall back to `index.html`
 
-The file `frontend/vercel.json` is included so React Router routes resolve correctly on refresh.
+### Recommended Vercel Settings
+
+- Framework preset: `Other`
+- Root directory: `./`
+- Install command: leave default
+- Build command: leave default
+- Output directory: leave default
+
+### Required Vercel Environment Variables
+
+- `MONGO_URL`
+- `DB_NAME`
+- `JWT_SECRET`
+- `CORS_ORIGINS`
+- `FRONTEND_URL`
+- `EMERGENT_LLM_KEY`
+- `GMAIL_EMAIL`
+- `GMAIL_APP_PASSWORD`
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+- `ADMIN_EMAIL`
+
+### Optional Environment Variables
+
+- `REACT_APP_BACKEND_URL`
+  Leave empty when frontend and backend are deployed in the same Vercel project.
+- `SSH_HOST`
+- `SSH_USER`
+- `SSH_PASSWORD`
+
+Note: the admin SSH terminal uses WebSockets and is disabled on Vercel deployments because Vercel serverless functions are not a suitable target for that feature.

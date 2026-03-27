@@ -6,8 +6,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import axios from 'axios';
+import { API_BASE } from '@/lib/config';
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const API = API_BASE;
 
 export default function ForgotPassword() {
   const [step, setStep] = useState('email'); // email | sent | reset | done
@@ -23,6 +24,10 @@ export default function ForgotPassword() {
       const t = path.replace('/reset-password/', '');
       setToken(t);
       setStep('reset');
+    } else if (path.startsWith('/verify-email/')) {
+      const t = path.replace('/verify-email/', '');
+      setToken(t);
+      setStep('verify');
     }
   });
 
@@ -128,7 +133,36 @@ export default function ForgotPassword() {
             </div>
           )}
 
-          {(step === 'email' || step === 'sent') && (
+          {step === 'verify' && (
+            <div className="text-center" data-testid="verify-email-page">
+              <div className="w-12 h-12 mx-auto mb-4 bg-[#00D4FF]/10 rounded-sm flex items-center justify-center">
+                <Shield className="w-6 h-6 text-[#00D4FF]" />
+              </div>
+              <h2 className="text-xl font-bold font-['Orbitron'] mb-2">Verify Email</h2>
+              <p className="text-sm text-[#8B949E] mb-6">Click below to verify your account email.</p>
+              <Button
+                data-testid="verify-email-submit"
+                onClick={async () => {
+                  setLoading(true);
+                  try {
+                    await axios.get(`${API}/auth/verify-email/${token}`);
+                    toast.success('Email verified successfully');
+                    setStep('done');
+                  } catch (err) {
+                    toast.error(err.response?.data?.detail || 'Verification failed');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                disabled={loading}
+                className="bg-[#00D4FF] text-black font-bold hover:bg-[#00B8E6] rounded-sm"
+              >
+                {loading ? 'Verifying...' : 'Verify Email'}
+              </Button>
+            </div>
+          )}
+
+          {(step === 'email' || step === 'sent' || step === 'verify') && (
             <div className="mt-6 text-center">
               <Link to="/auth" className="text-sm text-[#8B949E] hover:text-[#00D4FF] flex items-center justify-center gap-1">
                 <ArrowLeft className="w-3 h-3" /> Back to Login

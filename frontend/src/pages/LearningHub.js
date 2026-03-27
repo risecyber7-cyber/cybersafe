@@ -5,8 +5,9 @@ import remarkGfm from 'remark-gfm';
 import { BookOpen, ArrowLeft, Clock, User, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { API_BASE } from '@/lib/config';
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const API = API_BASE;
 const CATEGORIES = ['all', 'Web Hacking', 'Network Security', 'OSINT', 'Cryptography'];
 
 export default function LearningHub() {

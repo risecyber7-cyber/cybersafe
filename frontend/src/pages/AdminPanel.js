@@ -8,8 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+import { BACKEND_URL, IS_VERCEL } from '@/lib/config';
 
 export default function AdminPanel() {
   const { user, api, token, loading: authLoading } = useAuth();
@@ -208,6 +207,12 @@ function SSHTerminal({ token }) {
     if (connecting || connected) return;
     setConnecting(true);
 
+    if (IS_VERCEL) {
+      toast.error('SSH terminal is disabled on Vercel deployments');
+      setConnecting(false);
+      return;
+    }
+
     try {
       const { Terminal } = await import('@xterm/xterm');
       const { FitAddon } = await import('@xterm/addon-fit');
@@ -239,8 +244,9 @@ function SSHTerminal({ token }) {
 
       term.writeln('\x1b[32m[CyberGuard] Connecting to remote server...\x1b[0m');
 
-      const wsProtocol = BACKEND_URL.startsWith('https') ? 'wss' : 'ws';
-      const wsHost = BACKEND_URL.replace(/^https?:\/\//, '');
+      const resolvedBackendUrl = BACKEND_URL || window.location.origin;
+      const wsProtocol = resolvedBackendUrl.startsWith('https') ? 'wss' : 'ws';
+      const wsHost = resolvedBackendUrl.replace(/^https?:\/\//, '');
       const ws = new WebSocket(`${wsProtocol}://${wsHost}/api/ws/terminal?token=${token}`);
       wsRef.current = ws;
 
@@ -327,7 +333,9 @@ function SSHTerminal({ token }) {
         {!connected && !connecting && (
           <div className="p-6 text-center">
             <Terminal className="w-8 h-8 text-[#00D4FF]/30 mx-auto mb-3" />
-            <p className="text-sm text-[#8B949E]">Click "Connect" to start an SSH session</p>
+            <p className="text-sm text-[#8B949E]">
+              {IS_VERCEL ? 'SSH terminal is not available on Vercel serverless deployments' : 'Click "Connect" to start an SSH session'}
+            </p>
             <p className="text-xs text-[#8B949E]/60 mt-1">Admin-only access to remote server console</p>
           </div>
         )}
