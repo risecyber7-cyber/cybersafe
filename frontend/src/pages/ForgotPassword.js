@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Shield, Mail, ArrowRight, ArrowLeft, Lock, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -11,14 +11,13 @@ import { API_BASE } from '@/lib/config';
 const API = API_BASE;
 
 export default function ForgotPassword() {
-  const [step, setStep] = useState('email'); // email | sent | reset | done
+  const [step, setStep] = useState('email'); // email | sent | reset | verify | resetDone | verifyDone
   const [email, setEmail] = useState('');
   const [token, setToken] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Extract token from URL if present
-  useState(() => {
+  useEffect(() => {
     const path = window.location.pathname;
     if (path.startsWith('/reset-password/')) {
       const t = path.replace('/reset-password/', '');
@@ -29,7 +28,7 @@ export default function ForgotPassword() {
       setToken(t);
       setStep('verify');
     }
-  });
+  }, []);
 
   const requestReset = async (e) => {
     e.preventDefault();
@@ -51,7 +50,7 @@ export default function ForgotPassword() {
     setLoading(true);
     try {
       await axios.post(`${API}/auth/reset-password`, { token, new_password: newPassword });
-      setStep('done');
+      setStep('resetDone');
       toast.success('Password reset successfully!');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Invalid or expired token');
@@ -118,7 +117,7 @@ export default function ForgotPassword() {
             </>
           )}
 
-          {step === 'done' && (
+          {step === 'resetDone' && (
             <div className="text-center" data-testid="reset-success">
               <div className="w-12 h-12 mx-auto mb-4 bg-[#00D4FF]/10 rounded-sm flex items-center justify-center">
                 <CheckCircle className="w-6 h-6 text-[#00D4FF]" />
@@ -147,7 +146,7 @@ export default function ForgotPassword() {
                   try {
                     await axios.get(`${API}/auth/verify-email/${token}`);
                     toast.success('Email verified successfully');
-                    setStep('done');
+                    setStep('verifyDone');
                   } catch (err) {
                     toast.error(err.response?.data?.detail || 'Verification failed');
                   } finally {
@@ -159,6 +158,21 @@ export default function ForgotPassword() {
               >
                 {loading ? 'Verifying...' : 'Verify Email'}
               </Button>
+            </div>
+          )}
+
+          {step === 'verifyDone' && (
+            <div className="text-center" data-testid="verify-email-success">
+              <div className="w-12 h-12 mx-auto mb-4 bg-[#00D4FF]/10 rounded-sm flex items-center justify-center">
+                <CheckCircle className="w-6 h-6 text-[#00D4FF]" />
+              </div>
+              <h2 className="text-xl font-bold font-['Orbitron'] mb-2">Email Verified!</h2>
+              <p className="text-sm text-[#8B949E] mb-6">Your account is now verified. You can continue to login.</p>
+              <Link to="/auth">
+                <Button className="bg-[#00D4FF] text-black font-bold hover:bg-[#00B8E6] rounded-sm">
+                  Go to Login <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              </Link>
             </div>
           )}
 

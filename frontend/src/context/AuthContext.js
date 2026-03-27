@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { API_BASE } from '@/lib/config';
 
@@ -10,7 +10,7 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
 
-  const api = useCallback(() => {
+  const api = useMemo(() => {
     const instance = axios.create({ baseURL: API });
     if (token) {
       instance.defaults.headers.common['Authorization'] = `Bearer ${token}`;
@@ -20,7 +20,7 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (token) {
-      api().get('/auth/me')
+      api.get('/auth/me')
         .then(res => setUser(res.data))
         .catch(() => { localStorage.removeItem('token'); setToken(null); })
         .finally(() => setLoading(false));
@@ -52,7 +52,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, signup, logout, api: api() }}>
+    <AuthContext.Provider value={{ user, token, loading, login, signup, logout, api }}>
       {children}
     </AuthContext.Provider>
   );

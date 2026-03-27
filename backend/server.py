@@ -396,7 +396,6 @@ async def get_article(article_id: str):
 async def create_article(data: ArticleCreate, user=Depends(require_admin)):
     article = {"id": str(uuid.uuid4()), "title": data.title, "content": data.content, "category": data.category, "summary": data.summary, "author_name": user["username"], "author_id": user["id"], "created_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}
     await db.articles.insert_one(article)
-    del article["_id"]
     return article
 
 @api_router.delete("/articles/{article_id}")
@@ -634,7 +633,7 @@ app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
+    allow_credentials=os.environ.get('CORS_ORIGINS', '*') != '*',
     allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
