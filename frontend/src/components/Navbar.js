@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { Shield, Menu, X, Terminal, BookOpen, FlaskConical, LayoutDashboard, Bot, Wrench, LogOut, User, CreditCard, ShieldCheck } from 'lucide-react';
+import { Shield, Menu, X, Terminal, FlaskConical, LayoutDashboard, Wrench, LogOut, User, CreditCard, ShieldCheck, SearchCode } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -13,9 +13,8 @@ import {
 
 const NAV_LINKS = [
   { path: '/tools', label: 'Tools', icon: Wrench },
-  { path: '/learn', label: 'Learn', icon: BookOpen },
+  { path: '/tool-explorer', label: 'ToolExplorer', icon: SearchCode },
   { path: '/sandbox', label: 'Sandbox', icon: FlaskConical },
-  { path: '/ai', label: 'AI Assistant', icon: Bot },
   { path: '/plans', label: 'Plans', icon: CreditCard },
 ];
 

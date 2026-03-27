@@ -88,7 +88,7 @@ yarn start
 
 - Do not commit real `.env` files or secrets.
 - Rotate any credentials that were previously stored locally before pushing this repository publicly.
-- This repo does not currently include deployment config for Vercel, Netlify, Render, or Docker, so hosting should be configured based on your target provider.
+- This repo is set up for a single Vercel project from the repo root.
 
 ## Suggested Publish Flow
 
@@ -132,6 +132,8 @@ This repository is configured for a single Vercel project from the repo root:
 - `ADMIN_PASSWORD`
 - `ADMIN_EMAIL`
 
+Use a real remote MongoDB URI here. `mongodb://localhost:27017` will not work on Vercel.
+
 ### Optional Environment Variables
 
 - `REACT_APP_BACKEND_URL`
@@ -141,5 +143,17 @@ This repository is configured for a single Vercel project from the repo root:
 - `SSH_HOST`
 - `SSH_USER`
 - `SSH_PASSWORD`
+
+### Deploy Checklist
+
+1. Push the repo to GitHub.
+2. Import the repo into Vercel with:
+   Framework preset: `Other`
+   Root directory: `./`
+3. Add the required environment variables before the first production deploy.
+4. Keep `REACT_APP_BACKEND_URL` empty so the frontend uses same-origin `/api`.
+5. Deploy and test:
+   - frontend: `/`
+   - API health: `/api/health`
 
 Note: the admin SSH terminal uses WebSockets and is disabled on Vercel deployments because Vercel serverless functions are not a suitable target for that feature.

@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { BACKEND_URL, IS_VERCEL, SSH_HOST_LABEL } from '@/lib/config';
+import { BACKEND_URL, IS_VERCEL, SSH_HOST_LABEL, getWebSocketBase } from '@/lib/config';
 
 export default function AdminPanel() {
   const { user, api, token, loading: authLoading } = useAuth();
@@ -224,7 +224,7 @@ function SSHTerminal({ token }) {
 
       const term = new Terminal({
         cursorBlink: true,
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: "'Source Code Pro', monospace",
         fontSize: 14,
         theme: {
           background: '#050505',
@@ -245,9 +245,25 @@ function SSHTerminal({ token }) {
       term.writeln('\x1b[32m[CyberGuard] Connecting to remote server...\x1b[0m');
 
       const resolvedBackendUrl = BACKEND_URL || window.location.origin;
-      const wsProtocol = resolvedBackendUrl.startsWith('https') ? 'wss' : 'ws';
-      const wsHost = resolvedBackendUrl.replace(/^https?:\/\//, '');
-      const ws = new WebSocket(`${wsProtocol}://${wsHost}/api/ws/terminal?token=${token}`);
+      const healthCheck = await fetch(`${resolvedBackendUrl}/api/admin/stats`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => null);
+
+      if (!healthCheck) {
+        term.writeln('\r\n\x1b[31m[Error] Backend is not reachable at the configured URL\x1b[0m');
+        setConnecting(false);
+        return;
+      }
+
+      if (!healthCheck.ok) {
+        term.writeln(`\r\n\x1b[31m[Error] Admin authentication failed (${healthCheck.status})\x1b[0m`);
+        setConnecting(false);
+        return;
+      }
+
+      const wsBase = getWebSocketBase();
+      const wsHost = wsBase.replace(/^wss?:\/\//, '');
+      const ws = new WebSocket(`${wsBase}/api/ws/terminal?token=${encodeURIComponent(token)}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -260,12 +276,19 @@ function SSHTerminal({ token }) {
       };
 
       ws.onerror = () => {
-        term.writeln('\x1b[31m[Error] WebSocket connection failed\x1b[0m');
+        term.writeln(`\r\n\x1b[31m[Error] WebSocket connection failed to ${wsHost}\x1b[0m`);
+        term.writeln('\x1b[33m[Hint] Local backend should be reachable on 127.0.0.1:8000\x1b[0m');
         setConnecting(false);
       };
 
-      ws.onclose = () => {
-        term.writeln('\r\n\x1b[33m[Disconnected] SSH session ended\x1b[0m');
+      ws.onclose = (event) => {
+        if (event.code === 4001) {
+          term.writeln('\r\n\x1b[31m[Error] Authentication failed for SSH session\x1b[0m');
+        } else if (event.code === 4003) {
+          term.writeln('\r\n\x1b[31m[Error] Admin role required for SSH console\x1b[0m');
+        } else {
+          term.writeln('\r\n\x1b[33m[Disconnected] SSH session ended\x1b[0m');
+        }
         setConnected(false);
         setConnecting(false);
       };
@@ -281,6 +304,7 @@ function SSHTerminal({ token }) {
       return () => window.removeEventListener('resize', handleResize);
     } catch (err) {
       console.error('Terminal init error:', err);
+      termInstance.current?.writeln('\r\n\x1b[31m[Error] SSH terminal failed to initialize\x1b[0m');
       setConnecting(false);
     }
   }, [token, connecting, connected]);

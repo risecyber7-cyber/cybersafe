@@ -10,6 +10,14 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
 
+  const completeAuth = (data) => {
+    if (!data?.token) return data;
+    localStorage.setItem('token', data.token);
+    setToken(data.token);
+    setUser(data.user);
+    return data;
+  };
+
   const api = useMemo(() => {
     const instance = axios.create({ baseURL: API });
     if (token) {
@@ -31,28 +39,35 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const res = await axios.post(`${API}/auth/login`, { email, password });
-    localStorage.setItem('token', res.data.token);
-    setToken(res.data.token);
-    setUser(res.data.user);
-    return res.data;
+    if (res.data.requires_2fa) {
+      return res.data;
+    }
+    return completeAuth(res.data);
   };
 
   const signup = async (email, username, password) => {
     const res = await axios.post(`${API}/auth/signup`, { email, username, password });
-    localStorage.setItem('token', res.data.token);
-    setToken(res.data.token);
-    setUser(res.data.user);
-    return res.data;
+    return completeAuth(res.data);
   };
 
-  const logout = () => {
+  const verifyTwoFactor = async (challengeId, code) => {
+    const res = await axios.post(`${API}/auth/2fa/verify`, { challenge_id: challengeId, code });
+    return completeAuth(res.data);
+  };
+
+  const logout = async () => {
+    if (token) {
+      try {
+        await api.post('/auth/logout');
+      } catch {}
+    }
     localStorage.removeItem('token');
     setToken(null);
     setUser(null);
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, signup, logout, api }}>
+    <AuthContext.Provider value={{ user, token, loading, login, signup, logout, verifyTwoFactor, api }}>
       {children}
     </AuthContext.Provider>
   );
