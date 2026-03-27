@@ -100,3 +100,15 @@ git branch -M main
 git remote add origin <your-github-repo-url>
 git push -u origin main
 ```
+
+## Vercel Deployment
+
+Deploy the `frontend/` directory as the Vercel project root.
+
+- Framework preset: `Create React App`
+- Root directory: `frontend`
+- Build command: `yarn build`
+- Output directory: `build`
+- Environment variable: `REACT_APP_BACKEND_URL=<your-backend-url>`
+
+The file `frontend/vercel.json` is included so React Router routes resolve correctly on refresh.
