@@ -140,6 +140,8 @@ Use a real remote MongoDB URI here. `mongodb://localhost:27017` will not work on
   Leave empty when frontend and backend are deployed in the same Vercel project.
 - `REACT_APP_SUPPORT_EMAIL`
 - `REACT_APP_SSH_HOST`
+- `REACT_APP_ENABLE_SSH_TERMINAL`
+  Leave this as `false` on Vercel.
 - `SSH_HOST`
 - `SSH_USER`
 - `SSH_PASSWORD`
@@ -152,7 +154,8 @@ Use a real remote MongoDB URI here. `mongodb://localhost:27017` will not work on
    Root directory: `./`
 3. Add the required environment variables before the first production deploy.
 4. Keep `REACT_APP_BACKEND_URL` empty so the frontend uses same-origin `/api`.
-5. Deploy and test:
+5. Keep `REACT_APP_ENABLE_SSH_TERMINAL=false` on Vercel.
+6. Deploy and test:
    - frontend: `/`
    - API health: `/api/health`
 

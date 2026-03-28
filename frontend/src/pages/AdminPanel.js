@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { BACKEND_URL, IS_VERCEL, SSH_HOST_LABEL, getWebSocketBase } from '@/lib/config';
+import { BACKEND_URL, SSH_HOST_LABEL, SSH_TERMINAL_ENABLED, getWebSocketBase } from '@/lib/config';
 
 export default function AdminPanel() {
   const { user, api, token, loading: authLoading } = useAuth();
@@ -207,8 +207,8 @@ function SSHTerminal({ token }) {
     if (connecting || connected) return;
     setConnecting(true);
 
-    if (IS_VERCEL) {
-      toast.error('SSH terminal is disabled on Vercel deployments');
+    if (!SSH_TERMINAL_ENABLED) {
+      toast.error('SSH terminal is disabled for this deployment');
       setConnecting(false);
       return;
     }
@@ -358,7 +358,7 @@ function SSHTerminal({ token }) {
           <div className="p-6 text-center">
             <Terminal className="w-8 h-8 text-[#00D4FF]/30 mx-auto mb-3" />
             <p className="text-sm text-[#8B949E]">
-              {IS_VERCEL ? 'SSH terminal is not available on Vercel serverless deployments' : 'Click "Connect" to start an SSH session'}
+              {!SSH_TERMINAL_ENABLED ? 'SSH terminal is disabled for this deployment' : 'Click "Connect" to start an SSH session'}
             </p>
             <p className="text-xs text-[#8B949E]/60 mt-1">Admin-only access to remote server console</p>
           </div>

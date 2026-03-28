@@ -3,7 +3,9 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import RedirectResponse
+from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import PyMongoError
 import os
 import logging
 import uuid
@@ -32,13 +34,20 @@ from jose import jwt, JWTError
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+
+class MissingDatabaseProxy:
+    def __getattr__(self, name):
+        raise HTTPException(status_code=503, detail="Database is not configured. Set MONGO_URL and DB_NAME before deploying.")
+
+
 # MongoDB
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+mongo_url = os.environ.get("MONGO_URL", "").strip()
+db_name = os.environ.get("DB_NAME", "").strip() or "cyberguard"
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000) if mongo_url else None
+db = client[db_name] if client is not None else MissingDatabaseProxy()
 
 # JWT Config
-JWT_SECRET = os.environ['JWT_SECRET']
+JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
 JWT_ALGORITHM = "HS256"
 
 # Password hashing
@@ -56,6 +65,16 @@ SSH_USER = os.environ.get('SSH_USER', '')
 SSH_PASSWORD = os.environ.get('SSH_PASSWORD', '')
 HIBP_API_KEY = os.environ.get('HIBP_API_KEY', '').strip()
 VIRUSTOTAL_API_KEY = os.environ.get('VIRUSTOTAL_API_KEY', '').strip()
+
+
+def require_jwt_secret():
+    if JWT_SECRET:
+        return
+    raise HTTPException(status_code=503, detail="JWT authentication is not configured. Set JWT_SECRET before deploying.")
+
+
+def ssh_terminal_available() -> bool:
+    return not bool(os.environ.get("VERCEL"))
 
 
 def frontend_url() -> str:
@@ -224,6 +243,13 @@ async def get_tls_metadata(host: str) -> Optional[dict]:
         return None
 
 
+def first_rdap_event(events: list, names: set) -> str:
+    for event in events:
+        if event.get("eventAction") in names and event.get("eventDate"):
+            return event["eventDate"]
+    return "Unknown"
+
+
 def vt_analysis_summary(payload: dict) -> dict:
     attributes = payload.get("data", {}).get("attributes", {})
     stats = attributes.get("last_analysis_stats", {})
@@ -248,6 +274,12 @@ api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+@app.exception_handler(PyMongoError)
+async def mongodb_exception_handler(request: Request, exc: PyMongoError):
+    logger.warning("MongoDB request failed: %s", exc)
+    return JSONResponse(status_code=503, content={"detail": "Database unavailable. Check MONGO_URL, DB_NAME, and MongoDB network access."})
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -350,6 +382,7 @@ async def send_email(to_email: str, subject: str, html_content: str):
 
 # ── Auth Helpers ────────────────────────────────────────
 async def get_current_user(authorization: str = Header(None)):
+    require_jwt_secret()
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
     token = authorization.split(" ")[1]
@@ -401,6 +434,7 @@ async def verify_captcha_endpoint(captcha_id: str, answer: str):
 # ── Auth Routes ─────────────────────────────────────────
 @api_router.post("/auth/signup")
 async def signup(data: UserCreate, request: Request):
+    require_jwt_secret()
     # Verify captcha if provided
     if data.captcha_id:
         captcha = await db.captchas.find_one({"id": data.captcha_id}, {"_id": 0})
@@ -447,6 +481,7 @@ async def signup(data: UserCreate, request: Request):
 
 @api_router.post("/auth/login")
 async def login(data: UserLogin, request: Request):
+    require_jwt_secret()
     user = await db.users.find_one({"email": data.email}, {"_id": 0})
     if not user or not pwd_context.verify(data.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -464,6 +499,7 @@ async def login(data: UserLogin, request: Request):
 
 @api_router.post("/auth/2fa/verify")
 async def verify_two_factor(data: TwoFactorVerify, request: Request):
+    require_jwt_secret()
     challenge = await db.auth_challenges.find_one({"id": data.challenge_id}, {"_id": 0})
     if not challenge or challenge.get("used_at"):
         raise HTTPException(status_code=400, detail="Invalid verification challenge")
@@ -648,47 +684,47 @@ async def vulnerability_scanner(data: ToolInput, user=Depends(get_current_user))
 @api_router.post("/tools/whois")
 async def whois_lookup(data: ToolInput, user=Depends(get_current_user)):
     domain = normalize_target(data.target)
-    output = await asyncio.to_thread(lambda: __import__("subprocess").run(["whois", domain], capture_output=True, text=True, timeout=20))
-    if output.returncode != 0 and not output.stdout:
-        raise HTTPException(status_code=502, detail="WHOIS lookup failed")
-    lines = output.stdout.splitlines()
-    fields = {}
-    name_servers = []
-    statuses = []
-    for line in lines:
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        key = key.strip().lower()
-        value = value.strip()
-        if not value:
-            continue
-        if key in {"registrar", "organisation", "orgname"} and "registrar" not in fields:
-            fields["registrar"] = value
-        elif key in {"creation date", "created", "registered on", "domain registration date"} and "creation_date" not in fields:
-            fields["creation_date"] = value
-        elif key in {"registry expiry date", "expiry date", "expiration date", "paid-till"} and "expiration_date" not in fields:
-            fields["expiration_date"] = value
-        elif key in {"updated date", "last updated on", "changed"} and "updated_date" not in fields:
-            fields["updated_date"] = value
-        elif key in {"name server", "nserver"}:
-            name_servers.append(value.split()[0])
-        elif key == "status":
-            statuses.append(value)
-        elif key in {"registrant country", "country"} and "registrant_country" not in fields:
-            fields["registrant_country"] = value
-        elif key == "dnssec" and "dnssec" not in fields:
-            fields["dnssec"] = value
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": "CyberGuard/1.0"}) as http_client:
+            response = await http_client.get(f"https://rdap.org/domain/{domain}")
+            response.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"WHOIS lookup failed: {exc}")
+
+    payload = response.json()
+    events = payload.get("events", [])
+    entities = payload.get("entities", [])
+    registrar = "Unknown"
+    registrant_country = "Unknown"
+    for entity in entities:
+        roles = set(entity.get("roles", []))
+        vcard = entity.get("vcardArray", [None, []])[1]
+        for entry in vcard:
+            if len(entry) < 4:
+                continue
+            key = entry[0]
+            value = entry[3]
+            if "registrar" in roles and key == "fn" and registrar == "Unknown":
+                registrar = value
+            if "registrant" in roles and key == "adr" and isinstance(value, list) and value:
+                registrant_country = value[-1] or registrant_country
+
+    name_servers = [
+        item.get("ldhName")
+        for item in payload.get("nameservers", [])
+        if item.get("ldhName")
+    ][:10]
+    statuses = payload.get("status", [])[:8]
     result = {
         "domain": domain,
-        "registrar": fields.get("registrar", "Unknown"),
-        "creation_date": fields.get("creation_date", "Unknown"),
-        "expiration_date": fields.get("expiration_date", "Unknown"),
-        "updated_date": fields.get("updated_date", "Unknown"),
-        "status": statuses[:8],
-        "name_servers": name_servers[:10],
-        "registrant_country": fields.get("registrant_country", "Unknown"),
-        "dnssec": fields.get("dnssec", "Unknown"),
+        "registrar": registrar,
+        "creation_date": first_rdap_event(events, {"registration", "created"}),
+        "expiration_date": first_rdap_event(events, {"expiration", "expiry"}),
+        "updated_date": first_rdap_event(events, {"last changed", "last update of RDAP database", "updated"}),
+        "status": statuses,
+        "name_servers": name_servers,
+        "registrant_country": registrant_country,
+        "dnssec": "signed" if payload.get("secureDNS", {}).get("delegationSigned") else "unsigned",
     }
     await db.tool_history.insert_one({"id": str(uuid.uuid4()), "user_id": user["id"], "tool_name": "WHOIS Lookup", "input_data": domain, "result_summary": f"WHOIS for {domain}", "created_at": datetime.now(timezone.utc).isoformat()})
     return result
@@ -1020,8 +1056,9 @@ async def health_check():
             db_ok = False
     return {
         "status": "ok" if db_ok else "degraded",
-        "database": "connected" if db_ok else "unavailable",
+        "database": "connected" if db_ok else ("unavailable" if client is not None else "not-configured"),
         "environment": "vercel" if os.environ.get("VERCEL") else "local",
+        "ssh_terminal": "disabled" if not ssh_terminal_available() else "enabled",
     }
 
 # ── Security Routes ────────────────────────────────────
@@ -1114,6 +1151,10 @@ async def admin_stats(user=Depends(require_admin)):
 # ── Seed Data ───────────────────────────────────────────
 @app.on_event("startup")
 async def seed_data():
+    if client is None:
+        logger.warning("Startup seed skipped. Database is not configured.")
+        return
+
     # Seed admin account
     admin_username = os.environ.get('ADMIN_USERNAME', '').strip()
     admin_password = os.environ.get('ADMIN_PASSWORD', '').strip()
@@ -1121,33 +1162,41 @@ async def seed_data():
     if not all([admin_username, admin_password, admin_email]):
         logger.warning("Admin seed skipped. Set ADMIN_USERNAME, ADMIN_PASSWORD, and ADMIN_EMAIL.")
         return
-    existing_admin = await db.users.find_one({"username": admin_username})
-    if not existing_admin:
-        admin_doc = {
-            "id": str(uuid.uuid4()), "email": admin_email, "username": admin_username,
-            "password_hash": pwd_context.hash(admin_password), "role": "admin",
-            "email_verified": True, "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.users.insert_one(admin_doc)
-        logger.info(f"Admin account created: {admin_username}")
+    try:
+        existing_admin = await db.users.find_one({"username": admin_username})
+        if not existing_admin:
+            admin_doc = {
+                "id": str(uuid.uuid4()), "email": admin_email, "username": admin_username,
+                "password_hash": pwd_context.hash(admin_password), "role": "admin",
+                "email_verified": True, "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.users.insert_one(admin_doc)
+            logger.info(f"Admin account created: {admin_username}")
 
-    # Seed articles
-    count = await db.articles.count_documents({})
-    if count == 0:
-        articles = [
-            {"id": str(uuid.uuid4()), "title": "Understanding Cross-Site Scripting (XSS) Attacks", "content": "## What is XSS?\n\nCross-Site Scripting (XSS) is a type of injection attack where malicious scripts are injected into trusted websites.\n\n### Types of XSS\n\n1. **Reflected XSS** - The malicious script comes from the current HTTP request\n2. **Stored XSS** - The malicious script is stored on the target server\n3. **DOM-based XSS** - The vulnerability exists in client-side code\n\n### Prevention\n\n- Always sanitize user input\n- Use Content-Security-Policy headers\n- Encode output data\n- Use modern frameworks that auto-escape", "category": "Web Hacking", "summary": "Learn about XSS attack types and prevention.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-01-15T10:00:00Z", "updated_at": "2025-01-15T10:00:00Z"},
-            {"id": str(uuid.uuid4()), "title": "SQL Injection: The Silent Database Killer", "content": "## SQL Injection Overview\n\nSQL injection exploits security vulnerabilities in an application's database layer.\n\n### How it Works\n\n```sql\n-- Normal query\nSELECT * FROM users WHERE id = '1'\n-- Injected\nSELECT * FROM users WHERE id = '1' OR '1'='1'\n```\n\n### Prevention\n\n- Parameterized queries\n- Input validation\n- Least privilege DB accounts\n- WAF", "category": "Web Hacking", "summary": "Deep dive into SQL injection attacks and protection.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-01-20T10:00:00Z", "updated_at": "2025-01-20T10:00:00Z"},
-            {"id": str(uuid.uuid4()), "title": "Network Scanning with Nmap", "content": "## Introduction to Nmap\n\nNmap is the world's most popular network scanning tool.\n\n### Basic Commands\n\n```bash\nnmap target.com\nnmap -sV target.com\nnmap -O target.com\n```\n\n### Scan Types\n\n- **TCP Connect (-sT)**: Full handshake\n- **SYN Scan (-sS)**: Stealth\n- **UDP Scan (-sU)**: UDP ports", "category": "Network Security", "summary": "Master Nmap basics.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-02-01T10:00:00Z", "updated_at": "2025-02-01T10:00:00Z"},
-            {"id": str(uuid.uuid4()), "title": "OSINT Techniques for Ethical Hackers", "content": "## What is OSINT?\n\nOpen Source Intelligence from publicly available sources.\n\n### Key Tools\n\n1. **Shodan** - IoT search engine\n2. **theHarvester** - Email enumeration\n3. **Maltego** - Visual link analysis\n4. **Google Dorks** - Advanced searching\n\n### Examples\n\n```\nsite:target.com filetype:pdf\nintitle:\"index of\" \"parent directory\"\n```", "category": "OSINT", "summary": "OSINT techniques and tools.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-02-10T10:00:00Z", "updated_at": "2025-02-10T10:00:00Z"},
-            {"id": str(uuid.uuid4()), "title": "Cryptography Fundamentals", "content": "## Cryptography\n\nSecuring information through encoding.\n\n### Symmetric: AES, DES\n### Asymmetric: RSA, ECC\n### Hashing: SHA-256, bcrypt, Argon2", "category": "Cryptography", "summary": "Essential cryptography concepts.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-02-15T10:00:00Z", "updated_at": "2025-02-15T10:00:00Z"},
-            {"id": str(uuid.uuid4()), "title": "Wireless Network Security: WPA3", "content": "## Wireless Security Evolution\n\n### WPA3 Features\n- SAE handshake\n- Forward Secrecy\n- 192-bit security\n\n### Common Attacks\n1. Evil Twin\n2. Deauthentication\n3. KRACK (WPA2)\n4. PMKID", "category": "Network Security", "summary": "Modern wireless security.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-02-20T10:00:00Z", "updated_at": "2025-02-20T10:00:00Z"},
-        ]
-        await db.articles.insert_many(articles)
-        logger.info("Seeded 6 articles")
+        count = await db.articles.count_documents({})
+        if count == 0:
+            articles = [
+                {"id": str(uuid.uuid4()), "title": "Understanding Cross-Site Scripting (XSS) Attacks", "content": "## What is XSS?\n\nCross-Site Scripting (XSS) is a type of injection attack where malicious scripts are injected into trusted websites.\n\n### Types of XSS\n\n1. **Reflected XSS** - The malicious script comes from the current HTTP request\n2. **Stored XSS** - The malicious script is stored on the target server\n3. **DOM-based XSS** - The vulnerability exists in client-side code\n\n### Prevention\n\n- Always sanitize user input\n- Use Content-Security-Policy headers\n- Encode output data\n- Use modern frameworks that auto-escape", "category": "Web Hacking", "summary": "Learn about XSS attack types and prevention.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-01-15T10:00:00Z", "updated_at": "2025-01-15T10:00:00Z"},
+                {"id": str(uuid.uuid4()), "title": "SQL Injection: The Silent Database Killer", "content": "## SQL Injection Overview\n\nSQL injection exploits security vulnerabilities in an application's database layer.\n\n### How it Works\n\n```sql\n-- Normal query\nSELECT * FROM users WHERE id = '1'\n-- Injected\nSELECT * FROM users WHERE id = '1' OR '1'='1'\n```\n\n### Prevention\n\n- Parameterized queries\n- Input validation\n- Least privilege DB accounts\n- WAF", "category": "Web Hacking", "summary": "Deep dive into SQL injection attacks and protection.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-01-20T10:00:00Z", "updated_at": "2025-01-20T10:00:00Z"},
+                {"id": str(uuid.uuid4()), "title": "Network Scanning with Nmap", "content": "## Introduction to Nmap\n\nNmap is the world's most popular network scanning tool.\n\n### Basic Commands\n\n```bash\nnmap target.com\nnmap -sV target.com\nnmap -O target.com\n```\n\n### Scan Types\n\n- **TCP Connect (-sT)**: Full handshake\n- **SYN Scan (-sS)**: Stealth\n- **UDP Scan (-sU)**: UDP ports", "category": "Network Security", "summary": "Master Nmap basics.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-02-01T10:00:00Z", "updated_at": "2025-02-01T10:00:00Z"},
+                {"id": str(uuid.uuid4()), "title": "OSINT Techniques for Ethical Hackers", "content": "## What is OSINT?\n\nOpen Source Intelligence from publicly available sources.\n\n### Key Tools\n\n1. **Shodan** - IoT search engine\n2. **theHarvester** - Email enumeration\n3. **Maltego** - Visual link analysis\n4. **Google Dorks** - Advanced searching\n\n### Examples\n\n```\nsite:target.com filetype:pdf\nintitle:\"index of\" \"parent directory\"\n```", "category": "OSINT", "summary": "OSINT techniques and tools.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-02-10T10:00:00Z", "updated_at": "2025-02-10T10:00:00Z"},
+                {"id": str(uuid.uuid4()), "title": "Cryptography Fundamentals", "content": "## Cryptography\n\nSecuring information through encoding.\n\n### Symmetric: AES, DES\n### Asymmetric: RSA, ECC\n### Hashing: SHA-256, bcrypt, Argon2", "category": "Cryptography", "summary": "Essential cryptography concepts.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-02-15T10:00:00Z", "updated_at": "2025-02-15T10:00:00Z"},
+                {"id": str(uuid.uuid4()), "title": "Wireless Network Security: WPA3", "content": "## Wireless Security Evolution\n\n### WPA3 Features\n- SAE handshake\n- Forward Secrecy\n- 192-bit security\n\n### Common Attacks\n1. Evil Twin\n2. Deauthentication\n3. KRACK (WPA2)\n4. PMKID", "category": "Network Security", "summary": "Modern wireless security.", "author_name": "CyberGuard", "author_id": "system", "created_at": "2025-02-20T10:00:00Z", "updated_at": "2025-02-20T10:00:00Z"},
+            ]
+            await db.articles.insert_many(articles)
+            logger.info("Seeded 6 articles")
+    except PyMongoError as exc:
+        logger.warning("Startup seed skipped because database is unavailable: %s", exc)
 
 # ── WebSocket SSH Terminal ──────────────────────────────
 @app.websocket("/api/ws/terminal")
 async def websocket_terminal(websocket: WebSocket):
+    if not ssh_terminal_available():
+        await websocket.accept()
+        await websocket.send_text("\r\nSSH terminal is disabled on Vercel deployments.\r\n")
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     token = websocket.query_params.get("token")
     if not token:
@@ -1155,6 +1204,7 @@ async def websocket_terminal(websocket: WebSocket):
         await websocket.close(code=4001)
         return
     try:
+        require_jwt_secret()
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         session = await db.auth_sessions.find_one({"id": payload.get("sid")}, {"_id": 0})
         if not session or session.get("revoked_at"):
@@ -1233,4 +1283,5 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    if client is not None:
+        client.close()
