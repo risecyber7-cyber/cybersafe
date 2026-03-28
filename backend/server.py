@@ -1014,7 +1014,13 @@ async def submit_challenge(data: SandboxSubmit, user=Depends(get_current_user)):
 # ── AI Chat ─────────────────────────────────────────────
 @api_router.post("/ai/chat")
 async def ai_chat(data: ChatMessage, user=Depends(get_current_user)):
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="AI chat is not available in this deployment.",
+        )
     session_id = data.session_id or f"{user['id']}-{str(uuid.uuid4())[:8]}"
     try:
         chat = LlmChat(api_key=os.environ.get('EMERGENT_LLM_KEY'), session_id=session_id, system_message="You are CyberGuard AI, an expert cybersecurity assistant. Be concise, technical, and educational. Format responses with markdown.")
