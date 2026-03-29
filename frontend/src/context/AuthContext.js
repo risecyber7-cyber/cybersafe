@@ -45,6 +45,11 @@ export function AuthProvider({ children }) {
     return completeAuth(res.data);
   };
 
+  const googleLogin = async (credential) => {
+    const res = await axios.post(`${API}/auth/google`, { credential });
+    return completeAuth(res.data);
+  };
+
   const signup = async (email, username, password) => {
     const res = await axios.post(`${API}/auth/signup`, { email, username, password });
     return completeAuth(res.data);
@@ -67,7 +72,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, signup, logout, verifyTwoFactor, api }}>
+    <AuthContext.Provider value={{ user, token, loading, login, signup, googleLogin, logout, verifyTwoFactor, api }}>
       {children}
     </AuthContext.Provider>
   );

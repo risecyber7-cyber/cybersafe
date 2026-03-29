@@ -92,7 +92,7 @@ export default function ForgotPassword() {
               </div>
               <h2 className="text-xl font-bold font-['Orbitron'] mb-2">Check Your Email</h2>
               <p className="text-sm text-[#8B949E] mb-6">If an account exists for {email}, we've sent a password reset link.</p>
-              <p className="text-xs text-[#8B949E]">Didn't receive it? Check your spam folder or try again.</p>
+              <p className="text-xs text-[#8B949E]">The reset link is valid for 5 minutes. Check spam if you do not see it.</p>
             </div>
           )}
 
@@ -103,7 +103,7 @@ export default function ForgotPassword() {
                   <Lock className="w-6 h-6 text-[#00D4FF]" />
                 </div>
                 <h1 className="text-2xl font-black font-['Orbitron'] tracking-tight">Reset Password</h1>
-                <p className="text-sm text-[#8B949E] mt-2">Enter your new password</p>
+                <p className="text-sm text-[#8B949E] mt-2">Enter your new password before the 5-minute link expires</p>
               </div>
               <form onSubmit={resetPassword} className="space-y-4">
                 <div>

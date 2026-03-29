@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
-import { Search, TerminalSquare } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
+import { Search, TerminalSquare, Sparkles, Layers3, ChevronRight, PanelLeftClose, PanelLeftOpen, Maximize2, Minimize2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 
@@ -558,6 +559,9 @@ const KALI_TOOL_INDEX = [
 export default function ToolExplorer() {
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
+  const [selectedToolName, setSelectedToolName] = useState('Nmap');
+  const [treeOpen, setTreeOpen] = useState(true);
+  const [layoutMode, setLayoutMode] = useState('split');
 
   const filteredTools = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -569,73 +573,275 @@ export default function ToolExplorer() {
     });
   }, [query, activeCategory]);
 
-  return (
-    <div className="min-h-screen relative">
-      <div className="absolute inset-0 grid-bg pointer-events-none" />
-      <div className="max-w-7xl mx-auto px-4 py-10 relative" data-testid="tool-explorer-page">
-        <div className="mb-10 animate-fade-in-up">
-          <Badge className="bg-[#00D4FF]/10 text-[#00D4FF] border-0 mb-4">TOOL EXPLORER</Badge>
-          <h1 className="text-3xl sm:text-4xl font-black tracking-tight font-['Orbitron'] mb-3">
-            Search <span className="neon-text">Kali Tools</span>
-          </h1>
-          <p className="text-[#8B949E] max-w-3xl">
-            Har tool ke liye ab kam se kam 5 command examples diye gaye hain, saath mein short explanation bhi hai.
-          </p>
-        </div>
+  const groupedTools = useMemo(() => {
+    const groups = new Map();
+    filteredTools.forEach((tool) => {
+      if (!groups.has(tool.category)) groups.set(tool.category, []);
+      groups.get(tool.category).push(tool);
+    });
+    return Array.from(groups.entries()).map(([category, tools]) => ({ category, tools }));
+  }, [filteredTools]);
 
-        <div className="glass rounded-sm p-5 mb-8">
-          <div className="flex items-center gap-3">
-            <Search className="w-4 h-4 text-[#00D4FF]" />
+  const selectedTool = useMemo(() => {
+    return filteredTools.find((tool) => tool.name === selectedToolName) || filteredTools[0] || null;
+  }, [filteredTools, selectedToolName]);
+
+  useEffect(() => {
+    if (!filteredTools.length) return;
+    if (!filteredTools.some((tool) => tool.name === selectedToolName)) {
+      setSelectedToolName(filteredTools[0].name);
+    }
+  }, [filteredTools, selectedToolName]);
+
+  return (
+    <div
+      className="min-h-screen relative"
+      style={{
+        cursor: `url("data:image/svg+xml;utf8,${encodeURIComponent(`
+          <svg xmlns='http://www.w3.org/2000/svg' width='44' height='44' viewBox='0 0 44 44' fill='none'>
+            <defs>
+              <filter id='g' x='-80%' y='-80%' width='260%' height='260%'>
+                <feGaussianBlur stdDeviation='3.2' result='blur'/>
+                <feMerge>
+                  <feMergeNode in='blur'/>
+                  <feMergeNode in='SourceGraphic'/>
+                </feMerge>
+              </filter>
+              <linearGradient id='rgb' x1='6' y1='6' x2='34' y2='34' gradientUnits='userSpaceOnUse'>
+                <stop stop-color='#ff4d4d'/>
+                <stop offset='0.24' stop-color='#ffb84d'/>
+                <stop offset='0.48' stop-color='#42f5b9'/>
+                <stop offset='0.72' stop-color='#56c2ff'/>
+                <stop offset='1' stop-color='#b06eff'/>
+              </linearGradient>
+            </defs>
+            <path d='M8 6L8 30L14.4 23.6L19 35L23 33.2L18.6 21.8L28 21.4L8 6Z' fill='white' filter='url(%23g)'/>
+            <path d='M8 6L8 30L14.4 23.6L19 35L23 33.2L18.6 21.8L28 21.4L8 6Z' fill='url(%23rgb)' fill-opacity='0.52'/>
+            <path d='M10 8L10 26L14.2 21.9L18 31.2L20.8 29.9L17.2 20.6L24.2 20.3L10 8Z' fill='url(%23rgb)' fill-opacity='0.92'/>
+          </svg>
+        `)}") 8 6, auto`,
+      }}
+    >
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_12%_18%,rgba(110,143,190,0.14),transparent_24%),radial-gradient(circle_at_82%_16%,rgba(216,179,106,0.14),transparent_20%),radial-gradient(circle_at_52%_88%,rgba(147,183,171,0.12),transparent_24%)]" />
+      </div>
+      <div className="max-w-7xl mx-auto px-4 py-10 relative" data-testid="tool-explorer-page">
+        <motion.div
+          initial={{ opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+          className="holo-panel holo-float mb-10 p-6 sm:p-7"
+        >
+          <div className="holo-grid" />
+          <div className="holo-radar" />
+          <div className="holo-pulse" />
+          <div className="holo-content">
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <Badge className="border-0 bg-[var(--cyber-blue)]/12 text-[var(--cyber-blue)]">TOOL EXPLORER</Badge>
+              <Badge className="border-0 bg-[var(--cyber-blue)]/10 text-[#8fd7ff]">Blue Hologram</Badge>
+            </div>
+            <h1 className="text-3xl sm:text-4xl font-black tracking-tight font-['Orbitron'] mb-3 text-[var(--cyber-text)]">
+              Search <span className="neon-text">Kali Tools</span>
+            </h1>
+            <p className="max-w-3xl text-[var(--cyber-muted)]">
+              Har tool ke liye ab kam se kam 5 command examples diye gaye hain, saath mein short explanation bhi hai.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-3 text-sm text-[var(--cyber-muted)]">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2">
+                <span className="text-[var(--cyber-text)] font-semibold">{filteredTools.length}</span> visible tools
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2">
+                <span className="text-[var(--cyber-text)] font-semibold">{KALI_CATEGORIES.length}</span> categories
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <div className="holo-panel holo-float-delayed mb-8 p-5">
+          <div className="holo-grid" />
+          <div className="holo-content flex items-center gap-3">
+            <Search className="w-4 h-4 text-[var(--cyber-blue)]" />
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search Kali tool (e.g. nmap, sqlmap, metasploit)"
-              className="bg-black/40 border-[#00D4FF]/10 text-white focus:border-[#00D4FF] focus:ring-1 focus:ring-[#00D4FF] rounded-sm"
+              className="h-12 rounded-2xl border-white/10 bg-black/10 text-[var(--cyber-text)] focus:border-[var(--cyber-blue)] focus:ring-1 focus:ring-[var(--cyber-blue)]"
             />
           </div>
         </div>
 
         <div className="mb-8">
-          <div className="mb-3 text-xs uppercase tracking-[0.24em] text-[#8B949E]">Tools by Category</div>
+          <div className="mb-3 text-xs uppercase tracking-[0.24em] text-[var(--cyber-muted)]">Tools by Category</div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => setActiveCategory('All')} className={`rounded-sm border px-3 py-2 text-xs transition-colors ${activeCategory === 'All' ? 'border-[#00D4FF]/40 bg-[#00D4FF]/10 text-[#00D4FF]' : 'border-white/10 text-[#8B949E] hover:text-white'}`}>All</button>
+            <button type="button" onClick={() => setActiveCategory('All')} className={`group relative overflow-hidden rounded-2xl border px-3 py-2 text-xs transition-all ${activeCategory === 'All' ? 'border-[var(--cyber-orange)]/40 bg-[linear-gradient(135deg,rgba(216,179,106,0.14),rgba(216,179,106,0.06))] text-[var(--cyber-orange)] shadow-[0_0_24px_rgba(216,179,106,0.14)]' : 'border-white/10 bg-white/[0.03] text-[var(--cyber-muted)] hover:text-[var(--cyber-text)] hover:bg-white/[0.06]'}`}>
+              <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.16),transparent_60%)] opacity-60" />
+              <span className="relative">All</span>
+            </button>
             {KALI_CATEGORIES.map((category) => (
-              <button key={category.name} type="button" onClick={() => setActiveCategory(category.name)} className={`rounded-sm border px-3 py-2 text-xs transition-colors ${activeCategory === category.name ? 'border-[#00D4FF]/40 bg-[#00D4FF]/10 text-[#00D4FF]' : 'border-white/10 text-[#8B949E] hover:text-white'}`}>
-                {category.name} ({category.count})
+              <button key={category.name} type="button" onClick={() => setActiveCategory(category.name)} className={`group relative overflow-hidden rounded-2xl border px-3 py-2 text-xs transition-all ${activeCategory === category.name ? 'border-[var(--cyber-blue)]/40 bg-[linear-gradient(135deg,rgba(0,194,255,0.14),rgba(110,143,190,0.08))] text-[var(--cyber-blue)] shadow-[0_0_24px_rgba(0,194,255,0.12)]' : 'border-white/10 bg-white/[0.03] text-[var(--cyber-muted)] hover:text-[var(--cyber-text)] hover:bg-white/[0.06]'}`}>
+                <span className="absolute inset-0 bg-[linear-gradient(120deg,transparent,rgba(255,255,255,0.08),transparent)] opacity-60" />
+                <span className="relative">{category.name} ({category.count})</span>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-2">
-          {filteredTools.map((tool) => (
-            <div key={`${tool.category}-${tool.name}`} className="glass glass-motion rounded-sm p-5 hover-lift">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-lg font-bold text-white">{tool.name}</div>
-                  <div className="mt-1 text-sm text-[#8B949E]">{tool.description}</div>
-                </div>
-                <Badge className="bg-[#00D4FF]/10 text-[#00D4FF] border-0 text-[10px]">{tool.category}</Badge>
-              </div>
-
-              <div className="mt-4 space-y-3">
-                {tool.examples.map((example, index) => (
-                  <div key={`${tool.name}-${index + 1}`} className="rounded-sm border border-[#00D4FF]/10 bg-black/30 p-3">
-                    <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-[#8B949E]">
-                      <TerminalSquare className="w-3.5 h-3.5 text-[#00D4FF]" />
-                      Example {index + 1}
-                    </div>
-                    <code className="mt-2 block break-all text-xs text-[#00FF9F]">{example.command}</code>
-                    <div className="mt-2 text-xs text-[#8B949E]"># {example.comment}</div>
+        <div className={`grid gap-5 ${layoutMode === 'full' || !treeOpen ? 'xl:grid-cols-1' : 'xl:grid-cols-[340px_minmax(0,1fr)]'}`}>
+          {layoutMode !== 'full' && treeOpen && (
+            <motion.aside
+              initial={{ opacity: 0, x: -18 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
+              className="holo-panel holo-float p-4"
+            >
+              <div className="holo-grid" />
+              <div className="holo-content">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.26em] text-[var(--cyber-muted)]">Explorer Tree</div>
+                    <div className="mt-1 text-sm text-[var(--cyber-text)]">Kali categories</div>
                   </div>
-                ))}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setLayoutMode('full')}
+                      className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.04] p-2 text-[var(--cyber-muted)] transition-all hover:text-[var(--cyber-text)] hover:border-[var(--cyber-blue)]/30"
+                      aria-label="Full view"
+                    >
+                      <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(0,194,255,0.16),transparent_70%)] opacity-0 transition-opacity group-hover:opacity-100" />
+                      <Maximize2 className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTreeOpen(false)}
+                      className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.04] p-2 text-[var(--cyber-muted)] transition-all hover:text-[var(--cyber-text)] hover:border-[var(--cyber-orange)]/30"
+                      aria-label="Close tree"
+                    >
+                      <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(216,179,106,0.16),transparent_70%)] opacity-0 transition-opacity group-hover:opacity-100" />
+                      <PanelLeftClose className="h-4 w-4 text-[var(--cyber-orange)]" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {groupedTools.map((group) => (
+                    <div key={group.category} className="rounded-[22px] border border-white/10 bg-black/10 p-3">
+                      <button
+                        type="button"
+                        onClick={() => setActiveCategory(group.category)}
+                        className="flex w-full items-center justify-between gap-3 rounded-2xl px-2 py-2 text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          <ChevronRight className="h-4 w-4 text-[var(--cyber-orange)] rotate-90" />
+                          <span className="text-sm font-medium text-[var(--cyber-text)]">{group.category}</span>
+                        </div>
+                        <Badge className="border-0 bg-[var(--cyber-blue)]/10 text-[var(--cyber-blue)] text-[10px]">
+                          {group.tools.length}
+                        </Badge>
+                      </button>
+
+                      <div className="mt-2 space-y-1 pl-6">
+                        {group.tools.map((tool) => (
+                          <button
+                            key={tool.name}
+                            type="button"
+                            onClick={() => {
+                              setActiveCategory(group.category);
+                              setSelectedToolName(tool.name);
+                            }}
+                            className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
+                              selectedTool?.name === tool.name
+                                ? 'bg-[var(--cyber-blue)]/10 text-[var(--cyber-blue)]'
+                                : 'text-[var(--cyber-muted)] hover:bg-white/[0.04] hover:text-[var(--cyber-text)]'
+                            }`}
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${selectedTool?.name === tool.name ? 'bg-[var(--cyber-blue)]' : 'bg-[var(--cyber-blue)]/70'}`} />
+                            <span>{tool.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            </motion.aside>
+          )}
+
+          {selectedTool && (
+            <motion.div
+              key={`${selectedTool.category}-${selectedTool.name}`}
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
+              className="holo-panel holo-float-delayed p-5 sm:p-6"
+            >
+              <div className="holo-grid" />
+              <div className="holo-radar" />
+              <div className="holo-pulse" />
+              <div className="holo-content">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04]">
+                        <Layers3 className="h-4 w-4 text-[var(--cyber-blue)]" />
+                      </div>
+                      <div>
+                        <div className="text-lg font-bold text-[var(--cyber-text)]">{selectedTool.name}</div>
+                        <div className="mt-1 text-xs uppercase tracking-[0.2em] text-[var(--cyber-muted)]">{selectedTool.category}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 text-sm text-[var(--cyber-muted)]">{selectedTool.description}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!treeOpen && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTreeOpen(true);
+                          setLayoutMode('split');
+                        }}
+                        className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.04] p-2 text-[var(--cyber-muted)] transition-all hover:text-[var(--cyber-text)] hover:border-[var(--cyber-blue)]/30"
+                        aria-label="Open tree"
+                      >
+                        <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(0,194,255,0.16),transparent_70%)] opacity-0 transition-opacity group-hover:opacity-100" />
+                        <PanelLeftOpen className="h-4 w-4 text-[var(--cyber-blue)]" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setLayoutMode((prev) => (prev === 'split' ? 'full' : 'split'))}
+                      className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.04] p-2 text-[var(--cyber-muted)] transition-all hover:text-[var(--cyber-text)] hover:border-[var(--cyber-blue)]/30"
+                      aria-label={layoutMode === 'split' ? 'Full view' : 'Split view'}
+                    >
+                      <span className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(0,194,255,0.16),transparent_70%)] opacity-0 transition-opacity group-hover:opacity-100" />
+                      {layoutMode === 'split' ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
+                    </button>
+                    <Badge className="border-0 bg-[var(--cyber-blue)]/10 text-[var(--cyber-blue)] text-[10px]">Selected</Badge>
+                  </div>
+                </div>
+
+                <div className="mt-5 space-y-3">
+                  {selectedTool.examples.map((example, index) => (
+                    <div key={`${selectedTool.name}-${index + 1}`} className="rounded-[22px] border border-white/10 bg-black/10 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+                      <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-[var(--cyber-muted)]">
+                        <TerminalSquare className="w-3.5 h-3.5 text-[var(--cyber-blue)]" />
+                        Example {index + 1}
+                      </div>
+                      <code className="mt-2 block break-all text-xs text-[var(--cyber-orange)]">{example.command}</code>
+                      <div className="mt-2 flex items-start gap-2 text-xs text-[var(--cyber-muted)]">
+                        <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--cyber-green)]" />
+                        <span>{example.comment}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
         </div>
 
         {filteredTools.length === 0 && (
-          <div className="mt-8 rounded-sm border border-yellow-500/20 bg-yellow-500/5 p-4 text-sm text-yellow-300">
+          <div className="mt-8 rounded-[24px] border border-yellow-500/20 bg-yellow-500/5 p-4 text-sm text-yellow-300">
             No Kali tools matched this search.
           </div>
         )}

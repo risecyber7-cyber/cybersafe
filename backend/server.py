@@ -3,7 +3,9 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import PyMongoError
 import os
@@ -20,11 +22,14 @@ import paramiko
 import hashlib
 import socket
 import ssl
+import shutil
+import xml.etree.ElementTree as ET
+import json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 from collections import Counter
 from urllib.parse import urlparse, quote
@@ -32,19 +37,164 @@ from passlib.context import CryptContext
 from jose import jwt, JWTError
 
 ROOT_DIR = Path(__file__).parent
+PROJECT_ROOT = ROOT_DIR.parent
+FRONTEND_BUILD_DIR = PROJECT_ROOT / "frontend" / "build"
 load_dotenv(ROOT_DIR / '.env')
 
 
-class MissingDatabaseProxy:
-    def __getattr__(self, name):
-        raise HTTPException(status_code=503, detail="Database is not configured. Set MONGO_URL and DB_NAME before deploying.")
+class LocalInsertOneResult:
+    def __init__(self, inserted_id=None):
+        self.inserted_id = inserted_id
+
+
+class LocalInsertManyResult:
+    def __init__(self, inserted_ids=None):
+        self.inserted_ids = inserted_ids or []
+
+
+class LocalUpdateResult:
+    def __init__(self, matched_count=0, modified_count=0):
+        self.matched_count = matched_count
+        self.modified_count = modified_count
+
+
+class LocalDeleteResult:
+    def __init__(self, deleted_count=0):
+        self.deleted_count = deleted_count
+
+
+def _matches_query(document: dict, query: dict) -> bool:
+    for key, value in (query or {}).items():
+        if document.get(key) != value:
+            return False
+    return True
+
+
+def _apply_projection(document: dict, projection: Optional[dict]) -> dict:
+    item = dict(document)
+    if projection is None:
+        item.pop("_id", None)
+        return item
+
+    include_keys = {key for key, enabled in projection.items() if enabled and key != "_id"}
+    exclude_keys = {key for key, enabled in projection.items() if not enabled}
+
+    if include_keys:
+        projected = {key: item.get(key) for key in include_keys if key in item}
+        if projection.get("_id", 1) and "_id" in item:
+            projected["_id"] = item["_id"]
+        return projected
+
+    for key in exclude_keys:
+        item.pop(key, None)
+    item.pop("_id", None)
+    return item
+
+
+class LocalCursor:
+    def __init__(self, documents: List[dict], projection: Optional[dict] = None):
+        self.documents = documents
+        self.projection = projection
+        self.sort_key = None
+        self.sort_direction = 1
+
+    def sort(self, key: str, direction: int):
+        self.sort_key = key
+        self.sort_direction = direction
+        return self
+
+    async def to_list(self, length: int):
+        items = list(self.documents)
+        if self.sort_key is not None:
+            items.sort(key=lambda item: item.get(self.sort_key) or "", reverse=self.sort_direction == -1)
+        return [_apply_projection(item, self.projection) for item in items[:length]]
+
+
+class LocalCollection:
+    def __init__(self, database: "LocalDatabase", name: str):
+        self.database = database
+        self.name = name
+
+    def _items(self) -> List[dict]:
+        return self.database.data.setdefault(self.name, [])
+
+    async def insert_one(self, document: dict):
+        item = dict(document)
+        self._items().append(item)
+        self.database.flush()
+        return LocalInsertOneResult(item.get("id"))
+
+    async def insert_many(self, documents: List[dict]):
+        ids = []
+        for document in documents:
+            item = dict(document)
+            self._items().append(item)
+            ids.append(item.get("id"))
+        self.database.flush()
+        return LocalInsertManyResult(ids)
+
+    async def find_one(self, query: dict, projection: Optional[dict] = None):
+        for item in self._items():
+            if _matches_query(item, query):
+                return _apply_projection(item, projection)
+        return None
+
+    def find(self, query: Optional[dict] = None, projection: Optional[dict] = None):
+        matches = [dict(item) for item in self._items() if _matches_query(item, query or {})]
+        return LocalCursor(matches, projection)
+
+    async def update_one(self, query: dict, update: dict):
+        for item in self._items():
+            if not _matches_query(item, query):
+                continue
+            if "$set" in update:
+                item.update(update["$set"])
+            if "$unset" in update:
+                for key in update["$unset"].keys():
+                    item.pop(key, None)
+            self.database.flush()
+            return LocalUpdateResult(1, 1)
+        return LocalUpdateResult(0, 0)
+
+    async def delete_one(self, query: dict):
+        items = self._items()
+        for index, item in enumerate(items):
+            if _matches_query(item, query):
+                del items[index]
+                self.database.flush()
+                return LocalDeleteResult(1)
+        return LocalDeleteResult(0)
+
+    async def count_documents(self, query: dict):
+        return sum(1 for item in self._items() if _matches_query(item, query or {}))
+
+
+class LocalDatabase:
+    def __init__(self, path: Path):
+        self.path = path
+        self.data = self._load()
+
+    def _load(self) -> dict:
+        if not self.path.exists():
+            return {}
+        try:
+            return json.loads(self.path.read_text())
+        except Exception:
+            return {}
+
+    def flush(self):
+        self.path.write_text(json.dumps(self.data, indent=2, sort_keys=True))
+
+    def __getattr__(self, name: str):
+        return LocalCollection(self, name)
 
 
 # MongoDB
 mongo_url = os.environ.get("MONGO_URL", "").strip()
 db_name = os.environ.get("DB_NAME", "").strip() or "cyberguard"
 client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000) if mongo_url else None
-db = client[db_name] if client is not None else MissingDatabaseProxy()
+db = client[db_name] if client is not None else LocalDatabase(ROOT_DIR / ".localdb.json")
+DATABASE_MODE = "mongo" if client is not None else "local"
 
 # JWT Config
 JWT_SECRET = os.environ.get("JWT_SECRET", "").strip()
@@ -58,6 +208,7 @@ GMAIL_EMAIL = os.environ.get('GMAIL_EMAIL', '')
 GMAIL_APP_PASSWORD = os.environ.get('GMAIL_APP_PASSWORD', '')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '').rstrip('/')
 SUPPORT_EMAIL = os.environ.get('SUPPORT_EMAIL', GMAIL_EMAIL).strip()
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
 
 # SSH config
 SSH_HOST = os.environ.get('SSH_HOST', '')
@@ -65,6 +216,53 @@ SSH_USER = os.environ.get('SSH_USER', '')
 SSH_PASSWORD = os.environ.get('SSH_PASSWORD', '')
 HIBP_API_KEY = os.environ.get('HIBP_API_KEY', '').strip()
 VIRUSTOTAL_API_KEY = os.environ.get('VIRUSTOTAL_API_KEY', '').strip()
+DOCKER_SSH_NODES = {
+    "docker-01": {
+        "label": "Kali Node",
+        "host": "20.244.12.203",
+        "port": 2222,
+        "username": "root",
+        "password": "K@liR00t#8vLp!",
+        "root_user": "root",
+        "root_password": "K@liR00t#8vLp!",
+    },
+    "docker-02": {
+        "label": "Ubuntu Node",
+        "host": "20.244.12.203",
+        "port": 2223,
+        "username": "root",
+        "password": "UbunR00t#9kZa!",
+        "root_user": "root",
+        "root_password": "UbunR00t#9kZa!",
+    },
+    "docker-03": {
+        "label": "Alpine Node",
+        "host": "20.244.12.203",
+        "port": 2224,
+        "username": "root",
+        "password": "AlpiR00t#1wMn!",
+        "root_user": "root",
+        "root_password": "AlpiR00t#1wMn!",
+    },
+    "docker-04": {
+        "label": "Debian Node",
+        "host": "20.244.12.203",
+        "port": 2225,
+        "username": "root",
+        "password": "DebiR00t#3qFd!",
+        "root_user": "root",
+        "root_password": "DebiR00t#3qFd!",
+    },
+    "docker-05": {
+        "label": "CentOS Node",
+        "host": "20.244.12.203",
+        "port": 2226,
+        "username": "root",
+        "password": "CentR00t#6zKe!",
+        "root_user": "root",
+        "root_password": "CentR00t#6zKe!",
+    },
+}
 
 
 def require_jwt_secret():
@@ -276,6 +474,22 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
+async def ensure_database_backend():
+    global db, client, DATABASE_MODE
+    if client is None:
+        DATABASE_MODE = "local"
+        db = LocalDatabase(ROOT_DIR / ".localdb.json")
+        return
+    try:
+        await client.admin.command("ping")
+        db = client[db_name]
+        DATABASE_MODE = "mongo"
+    except Exception as exc:
+        logger.warning("MongoDB unavailable, falling back to local JSON storage: %s", exc)
+        db = LocalDatabase(ROOT_DIR / ".localdb.json")
+        DATABASE_MODE = "local"
+
+
 @app.exception_handler(PyMongoError)
 async def mongodb_exception_handler(request: Request, exc: PyMongoError):
     logger.warning("MongoDB request failed: %s", exc)
@@ -309,6 +523,9 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     email: str
     password: str
+
+class GoogleLoginRequest(BaseModel):
+    credential: str
 
 class TwoFactorVerify(BaseModel):
     challenge_id: str
@@ -356,6 +573,37 @@ class PlanSubscribe(BaseModel):
     email: str
     phone: str = ""
 
+class RoadmapTaskCreate(BaseModel):
+    title: str
+    category: str
+    summary: str = ""
+    priority: str = "medium"
+
+class RoadmapTaskUpdate(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
+    summary: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+
+class ReconStartRequest(BaseModel):
+    domain: str
+
+
+DOMAIN_PATTERN = re.compile(
+    r"^(?=.{1,253}$)(?!-)(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}$"
+)
+RECON_STAGE_TIMEOUT = 120
+RECON_TOTAL_TIMEOUT = 480
+RECON_STAGES = [
+    {"key": "subdomains", "label": "Enumerating subdomains", "progress": 20},
+    {"key": "hosts", "label": "Checking live hosts", "progress": 45},
+    {"key": "ports", "label": "Scanning open ports", "progress": 72},
+    {"key": "urls", "label": "Collecting URLs", "progress": 92},
+    {"key": "complete", "label": "Recon report finalized", "progress": 100},
+]
+recon_scans: Dict[str, Dict[str, Any]] = {}
+
 # ── Email Helper ────────────────────────────────────────
 def send_email_sync(to_email: str, subject: str, html_content: str):
     if not GMAIL_APP_PASSWORD:
@@ -381,6 +629,62 @@ async def send_email(to_email: str, subject: str, html_content: str):
     return await loop.run_in_executor(None, send_email_sync, to_email, subject, html_content)
 
 # ── Auth Helpers ────────────────────────────────────────
+def serialize_user(user: dict) -> dict:
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "username": user["username"],
+        "role": user["role"],
+        "email_verified": user.get("email_verified", False),
+        "created_at": user["created_at"],
+        "two_factor_enabled": user.get("two_factor_enabled", False),
+        "auth_provider": user.get("auth_provider", "password"),
+    }
+
+
+async def verify_google_credential(credential: str) -> dict:
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=503, detail="Google login is not configured")
+    if not credential.strip():
+        raise HTTPException(status_code=400, detail="Missing Google credential")
+
+    async with httpx.AsyncClient(timeout=10) as http_client:
+        try:
+            response = await http_client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": credential.strip()},
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("Google token verification failed: %s", exc)
+            raise HTTPException(status_code=502, detail="Unable to verify Google login") from exc
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google credential")
+
+    payload = response.json()
+    audience = payload.get("aud")
+    issuer = payload.get("iss")
+    email = (payload.get("email") or "").strip().lower()
+    email_verified = str(payload.get("email_verified", "")).lower() == "true"
+    subject = (payload.get("sub") or "").strip()
+
+    if audience != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=401, detail="Google credential audience mismatch")
+    if issuer not in {"accounts.google.com", "https://accounts.google.com"}:
+        raise HTTPException(status_code=401, detail="Invalid Google credential issuer")
+    if not email or not subject:
+        raise HTTPException(status_code=401, detail="Google account data is incomplete")
+    if not email_verified:
+        raise HTTPException(status_code=401, detail="Google email is not verified")
+
+    return {
+        "sub": subject,
+        "email": email,
+        "given_name": (payload.get("given_name") or "").strip(),
+        "name": (payload.get("name") or "").strip(),
+    }
+
+
 async def get_current_user(authorization: str = Header(None)):
     require_jwt_secret()
     if not authorization or not authorization.startswith("Bearer "):
@@ -404,6 +708,418 @@ async def require_admin(user=Depends(get_current_user)):
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+async def authenticate_websocket_user(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.send_text("\r\nAuthentication token missing.\r\n")
+        await websocket.close(code=4001)
+        return None
+    try:
+        require_jwt_secret()
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        session = await db.auth_sessions.find_one({"id": payload.get("sid")}, {"_id": 0})
+        if not session or session.get("revoked_at"):
+            await websocket.send_text("\r\nSession expired.\r\n")
+            await websocket.close(code=4001)
+            return None
+        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+        if not user:
+            await websocket.send_text("\r\nInvalid or expired session token.\r\n")
+            await websocket.close(code=4001)
+            return None
+        return user
+    except Exception:
+        await websocket.send_text("\r\nInvalid or expired session token.\r\n")
+        await websocket.close(code=4001)
+        return None
+
+
+def validate_domain_input(value: str) -> str:
+    domain = value.strip().lower().rstrip(".")
+    if domain.startswith(("http://", "https://")) or "/" in domain or ":" in domain:
+        raise HTTPException(status_code=400, detail="Enter a domain only, for example example.com")
+    if not DOMAIN_PATTERN.fullmatch(domain):
+        raise HTTPException(status_code=400, detail="Invalid domain format")
+    return domain
+
+
+def get_recon_stage(key: str) -> dict:
+    for stage in RECON_STAGES:
+        if stage["key"] == key:
+            return stage
+    return {"key": key, "label": key, "progress": 0}
+
+
+def parse_unique_lines(lines: List[str], limit: int = 500) -> List[str]:
+    seen = set()
+    result = []
+    for line in lines:
+        value = line.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def extract_live_hosts(httpx_lines: List[str]) -> List[str]:
+    hosts = []
+    for line in httpx_lines:
+        candidate = line.strip()
+        if not candidate:
+            continue
+        parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
+        host = (parsed.netloc or parsed.path).split(":")[0].strip().lower()
+        if host:
+            hosts.append(host)
+    return parse_unique_lines(hosts, limit=250)
+
+
+def parse_nmap_output(xml_payload: str) -> List[dict]:
+    if not xml_payload.strip():
+        return []
+    try:
+        root = ET.fromstring(xml_payload)
+    except ET.ParseError:
+        return []
+
+    ports = []
+    for host in root.findall("host"):
+        for port in host.findall("./ports/port"):
+            state_node = port.find("state")
+            if state_node is None or state_node.attrib.get("state") != "open":
+                continue
+            service_node = port.find("service")
+            if service_node is not None:
+                service_name = service_node.attrib.get("name", "unknown")
+                detail_bits = [
+                    service_node.attrib.get("product"),
+                    service_node.attrib.get("version"),
+                    service_node.attrib.get("extrainfo"),
+                ]
+                service = " ".join(bit for bit in detail_bits if bit)
+                service = service_name if not service else f"{service_name} {service}"
+            else:
+                service = "unknown"
+            ports.append({
+                "port": int(port.attrib.get("portid", "0") or 0),
+                "protocol": port.attrib.get("protocol", "tcp"),
+                "service": service,
+                "state": "open",
+            })
+    ports.sort(key=lambda item: (item["protocol"], item["port"]))
+    return ports
+
+
+RECON_TOOL_SPECS = [
+    {
+        "key": "subfinder",
+        "label": "Subfinder",
+        "stage": "subdomains",
+        "purpose": "Passive subdomain enumeration",
+        "version_args": ["-version"],
+        "install": "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    },
+    {
+        "key": "assetfinder",
+        "label": "Assetfinder",
+        "stage": "subdomains",
+        "purpose": "Additional passive asset discovery",
+        "version_args": ["-h"],
+        "install": "go install github.com/tomnomnom/assetfinder@latest",
+    },
+    {
+        "key": "httpx",
+        "label": "Httpx",
+        "stage": "hosts",
+        "purpose": "HTTP probing and live host detection",
+        "version_args": ["-version"],
+        "install": "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest",
+    },
+    {
+        "key": "nmap",
+        "label": "Nmap",
+        "stage": "ports",
+        "purpose": "Open port and service fingerprinting",
+        "version_args": ["--version"],
+        "install": "sudo apt-get update && sudo apt-get install -y nmap",
+    },
+    {
+        "key": "gau",
+        "label": "GAU",
+        "stage": "urls",
+        "purpose": "Historical URL harvesting",
+        "version_args": ["--version"],
+        "install": "go install github.com/lc/gau/v2/cmd/gau@latest",
+    },
+    {
+        "key": "katana",
+        "label": "Katana",
+        "stage": "urls",
+        "purpose": "Web crawling and endpoint discovery",
+        "version_args": ["-version"],
+        "install": "go install github.com/projectdiscovery/katana/cmd/katana@latest",
+    },
+]
+
+
+def read_tool_version(binary_path: str, args: List[str]) -> Optional[str]:
+    try:
+        import subprocess
+        result = subprocess.run([binary_path, *args], capture_output=True, text=True, timeout=4)
+        output = (result.stdout or result.stderr or "").strip().splitlines()
+        return output[0][:160] if output else None
+    except Exception:
+        return None
+
+
+def get_recon_capability_snapshot() -> dict:
+    tools = []
+    available_count = 0
+    for spec in RECON_TOOL_SPECS:
+        binary_path = shutil.which(spec["key"])
+        available = bool(binary_path)
+        if available:
+            available_count += 1
+        tools.append({
+            "key": spec["key"],
+            "label": spec["label"],
+            "stage": spec["stage"],
+            "purpose": spec["purpose"],
+            "available": available,
+            "path": binary_path,
+            "version": read_tool_version(binary_path, spec["version_args"]) if binary_path else None,
+            "install_command": spec["install"],
+        })
+    return {
+        "tools": tools,
+        "coverage_percent": round((available_count / len(RECON_TOOL_SPECS)) * 100),
+        "available_count": available_count,
+        "total_count": len(RECON_TOOL_SPECS),
+        "stage_timeout_seconds": RECON_STAGE_TIMEOUT,
+        "total_timeout_seconds": RECON_TOTAL_TIMEOUT,
+    }
+
+
+def build_recon_snapshot(scan: Dict[str, Any]) -> dict:
+    return {
+        "type": "snapshot",
+        "scan_id": scan["id"],
+        "status": scan["status"],
+        "domain": scan["domain"],
+        "progress": scan["progress"],
+        "stage": scan["stage"],
+        "started_at": scan["started_at"],
+        "finished_at": scan.get("finished_at"),
+        "logs": scan["result"]["logs"][-250:],
+        "result": scan["result"],
+        "report_id": scan.get("report_id"),
+        "error": scan.get("error"),
+    }
+
+
+async def broadcast_recon_event(scan: Dict[str, Any], payload: dict):
+    stale = []
+    for websocket in list(scan["subscribers"]):
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            stale.append(websocket)
+    for websocket in stale:
+        scan["subscribers"].discard(websocket)
+
+
+async def append_recon_log(scan: Dict[str, Any], line: str):
+    entry = line.strip()
+    if not entry:
+        return
+    scan["result"]["logs"].append(entry)
+    if len(scan["result"]["logs"]) > 600:
+        scan["result"]["logs"] = scan["result"]["logs"][-600:]
+    await broadcast_recon_event(scan, {"type": "log", "scan_id": scan["id"], "line": entry})
+
+
+async def update_recon_stage(scan: Dict[str, Any], stage_key: str, line: Optional[str] = None):
+    stage = get_recon_stage(stage_key)
+    scan["stage"] = stage
+    scan["progress"] = stage["progress"]
+    await broadcast_recon_event(
+        scan,
+        {
+            "type": "stage",
+            "scan_id": scan["id"],
+            "stage": stage,
+            "progress": scan["progress"],
+            "status": scan["status"],
+        },
+    )
+    if line:
+        await append_recon_log(scan, line)
+
+
+async def run_recon_command(
+    binary: str,
+    args: List[str],
+    scan: Dict[str, Any],
+    stage_key: str,
+    stdin_text: Optional[str] = None,
+    timeout: int = RECON_STAGE_TIMEOUT,
+) -> Dict[str, Any]:
+    binary_path = shutil.which(binary)
+    if not binary_path:
+        await append_recon_log(scan, f"[warn] {binary} not found, skipping {stage_key}")
+        return {"stdout": [], "stderr": [], "returncode": None, "available": False, "timed_out": False}
+
+    await append_recon_log(scan, f"$ {binary} {' '.join(args)}")
+    process = await asyncio.create_subprocess_exec(
+        binary_path,
+        *args,
+        stdin=asyncio.subprocess.PIPE if stdin_text is not None else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    stdout_lines: List[str] = []
+    stderr_lines: List[str] = []
+
+    async def pump(stream, collector: List[str], prefix: str = ""):
+        while True:
+            chunk = await stream.readline()
+            if not chunk:
+                break
+            text = chunk.decode("utf-8", errors="replace").rstrip()
+            if not text:
+                continue
+            collector.append(text)
+            await append_recon_log(scan, f"{prefix}{text}")
+
+    async def write_stdin():
+        if process.stdin is None or stdin_text is None:
+            return
+        process.stdin.write(stdin_text.encode("utf-8"))
+        await process.stdin.drain()
+        process.stdin.close()
+        await process.stdin.wait_closed()
+
+    stdout_task = asyncio.create_task(pump(process.stdout, stdout_lines))
+    stderr_task = asyncio.create_task(pump(process.stderr, stderr_lines, prefix="[stderr] "))
+    stdin_task = asyncio.create_task(write_stdin()) if stdin_text is not None else None
+
+    timed_out = False
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        timed_out = True
+        process.kill()
+        await process.wait()
+        await append_recon_log(scan, f"[timeout] {binary} exceeded {timeout}s and was terminated")
+
+    await stdout_task
+    await stderr_task
+    if stdin_task is not None:
+        await stdin_task
+
+    return {
+        "stdout": stdout_lines,
+        "stderr": stderr_lines,
+        "returncode": process.returncode,
+        "available": True,
+        "timed_out": timed_out,
+    }
+
+
+async def persist_recon_report(scan: Dict[str, Any]):
+    report_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": scan["user_id"],
+        "domain": scan["domain"],
+        "status": scan["status"],
+        "progress": scan["progress"],
+        "stage": scan["stage"]["key"],
+        "result": scan["result"],
+        "error": scan.get("error"),
+        "created_at": scan["started_at"],
+        "finished_at": scan.get("finished_at"),
+    }
+    await db.recon_reports.insert_one(report_doc)
+    scan["report_id"] = report_doc["id"]
+    return report_doc
+
+
+async def run_recon_scan(scan_id: str):
+    scan = recon_scans[scan_id]
+    started = asyncio.get_running_loop().time()
+    domain = scan["domain"]
+    scan["status"] = "running"
+    await update_recon_stage(scan, "subdomains", f"[stage] Starting reconnaissance for {domain}")
+
+    try:
+        async def execute_pipeline():
+            subfinder_run = await run_recon_command("subfinder", ["-d", domain, "-silent"], scan, "subdomains")
+            assetfinder_run = await run_recon_command("assetfinder", ["--subs-only", domain], scan, "subdomains")
+            subdomains = parse_unique_lines([*subfinder_run["stdout"], *assetfinder_run["stdout"]], limit=600)
+            scan["result"]["subdomains"] = subdomains
+            await append_recon_log(scan, f"[info] {len(subdomains)} unique subdomains collected")
+
+            await update_recon_stage(scan, "hosts", "[stage] Probing live hosts with httpx")
+            host_input = "\n".join(subdomains or [domain]) + "\n"
+            httpx_run = await run_recon_command("httpx", ["-silent"], scan, "hosts", stdin_text=host_input)
+            live_hosts = extract_live_hosts(httpx_run["stdout"])
+            scan["result"]["live_hosts"] = live_hosts
+            await append_recon_log(scan, f"[info] {len(live_hosts)} live hosts detected")
+
+            await update_recon_stage(scan, "ports", "[stage] Running nmap service detection")
+            nmap_run = await run_recon_command("nmap", ["-sV", "-oX", "-", domain], scan, "ports")
+            ports = parse_nmap_output("\n".join(nmap_run["stdout"]))
+            scan["result"]["ports"] = ports
+            await append_recon_log(scan, f"[info] {len(ports)} open ports identified")
+
+            await update_recon_stage(scan, "urls", "[stage] Aggregating URLs from gau and katana")
+            gau_run = await run_recon_command("gau", [domain], scan, "urls")
+            katana_run = await run_recon_command("katana", ["-u", f"https://{domain}"], scan, "urls")
+            urls = parse_unique_lines(
+                [
+                    line for line in [*gau_run["stdout"], *katana_run["stdout"]]
+                    if line.startswith("http://") or line.startswith("https://")
+                ],
+                limit=1000,
+            )
+            scan["result"]["urls"] = urls
+            await append_recon_log(scan, f"[info] {len(urls)} URLs collected")
+
+        await asyncio.wait_for(execute_pipeline(), timeout=RECON_TOTAL_TIMEOUT)
+
+        scan["status"] = "completed"
+        scan["finished_at"] = datetime.now(timezone.utc).isoformat()
+        scan["result"]["duration_seconds"] = round(asyncio.get_running_loop().time() - started, 2)
+        await update_recon_stage(scan, "complete", "[done] Reconnaissance completed")
+        await persist_recon_report(scan)
+        await db.tool_history.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": scan["user_id"],
+            "tool_name": "Reconnaissance System",
+            "input_data": domain,
+            "result_summary": f"{len(scan['result']['subdomains'])} subdomains, {len(scan['result']['live_hosts'])} live hosts, {len(scan['result']['ports'])} ports, {len(scan['result']['urls'])} urls",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except asyncio.TimeoutError:
+        scan["status"] = "failed"
+        scan["error"] = f"Recon exceeded the {RECON_TOTAL_TIMEOUT}s execution limit"
+        scan["finished_at"] = datetime.now(timezone.utc).isoformat()
+        await append_recon_log(scan, f"[error] {scan['error']}")
+        await persist_recon_report(scan)
+    except Exception as exc:
+        scan["status"] = "failed"
+        scan["error"] = str(exc)
+        scan["finished_at"] = datetime.now(timezone.utc).isoformat()
+        await append_recon_log(scan, f"[error] Recon failed: {exc}")
+        await persist_recon_report(scan)
+    finally:
+        await broadcast_recon_event(scan, build_recon_snapshot(scan))
 
 # ── Captcha Routes ──────────────────────────────────────
 @api_router.post("/captcha/generate")
@@ -493,7 +1209,65 @@ async def login(data: UserLogin, request: Request):
     await send_login_alert(user, session_doc)
     return {
         "token": token,
-        "user": {"id": user["id"], "email": user["email"], "username": user["username"], "role": user["role"], "email_verified": user.get("email_verified", False), "created_at": user["created_at"], "two_factor_enabled": user.get("two_factor_enabled", False)},
+        "user": serialize_user(user),
+        "session_id": session_doc["id"],
+    }
+
+@api_router.get("/auth/providers")
+async def auth_providers():
+    return {
+        "google": {
+            "enabled": bool(GOOGLE_CLIENT_ID),
+            "client_id": GOOGLE_CLIENT_ID or None,
+        }
+    }
+
+
+@api_router.post("/auth/google")
+async def google_login(data: GoogleLoginRequest, request: Request):
+    require_jwt_secret()
+    google_user = await verify_google_credential(data.credential)
+    user = await db.users.find_one({"email": google_user["email"]}, {"_id": 0})
+
+    if not user:
+        base_username = re.sub(r"[^a-zA-Z0-9_]", "", (google_user["given_name"] or google_user["name"] or google_user["email"].split("@")[0]))[:18] or "googleuser"
+        username = base_username
+        suffix = 1
+        while await db.users.find_one({"username": username}, {"_id": 0}):
+            username = f"{base_username[:14]}{suffix}"
+            suffix += 1
+
+        user = {
+            "id": str(uuid.uuid4()),
+            "email": google_user["email"],
+            "username": username,
+            "password_hash": "",
+            "role": "user",
+            "email_verified": True,
+            "verification_token": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "two_factor_enabled": False,
+            "auth_provider": "google",
+            "google_sub": google_user["sub"],
+        }
+        await db.users.insert_one(user)
+    else:
+        updates = {
+            "email_verified": True,
+            "auth_provider": user.get("auth_provider") or "google",
+            "google_sub": google_user["sub"],
+        }
+        if not user.get("username"):
+            updates["username"] = google_user["email"].split("@")[0]
+        await db.users.update_one({"id": user["id"]}, {"$set": updates})
+        user.update(updates)
+
+    session_doc = await create_session(user, request, verified_2fa=not user.get("two_factor_enabled", False))
+    token = create_token(user["id"], user["role"], session_doc["id"])
+    await send_login_alert(user, session_doc)
+    return {
+        "token": token,
+        "user": serialize_user(user),
         "session_id": session_doc["id"],
     }
 
@@ -517,13 +1291,15 @@ async def verify_two_factor(data: TwoFactorVerify, request: Request):
     await send_login_alert(user, session_doc)
     return {
         "token": token,
-        "user": {"id": user["id"], "email": user["email"], "username": user["username"], "role": user["role"], "email_verified": user.get("email_verified", False), "created_at": user["created_at"], "two_factor_enabled": user.get("two_factor_enabled", False)},
+        "user": serialize_user(user),
         "session_id": session_doc["id"],
     }
 
 @api_router.get("/auth/me")
 async def get_me(user=Depends(get_current_user)):
-    return {"id": user["id"], "email": user["email"], "username": user["username"], "role": user["role"], "email_verified": user.get("email_verified", False), "created_at": user["created_at"], "session_id": user.get("session_id"), "two_factor_enabled": user.get("two_factor_enabled", False)}
+    response = serialize_user(user)
+    response["session_id"] = user.get("session_id")
+    return response
 
 @api_router.post("/auth/logout")
 async def logout(user=Depends(get_current_user)):
@@ -547,14 +1323,14 @@ async def forgot_password(data: ForgotPasswordRequest):
     await db.password_resets.insert_one({
         "id": str(uuid.uuid4()), "user_id": user["id"], "token": reset_token,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     })
     if GMAIL_APP_PASSWORD:
         html = f"""<div style="font-family:Arial;padding:20px;background:#0A0A0A;color:#fff;">
         <h2 style="color:#00FF66;">Password Reset</h2>
         <p>You requested a password reset for your CyberGuard account.</p>
         <a href="{frontend_url()}/reset-password/{reset_token}" style="display:inline-block;padding:12px 24px;background:#00FF66;color:#000;text-decoration:none;font-weight:bold;">Reset Password</a>
-        <p style="color:#888;margin-top:20px;">This link expires in 1 hour. If you didn't request this, ignore this email.</p></div>"""
+        <p style="color:#888;margin-top:20px;">This link expires in 5 minutes. If you didn't request this, ignore this email.</p></div>"""
         asyncio.create_task(send_email(data.email, "CyberGuard Password Reset", html))
     return {"message": "If the email exists, a reset link has been sent."}
 
@@ -957,6 +1733,83 @@ async def hash_generator(data: ToolInput):
         "sha512": hashlib.sha512(encoded).hexdigest(),
     }
 
+
+@api_router.post("/recon/start")
+async def start_recon_scan(data: ReconStartRequest, user=Depends(get_current_user)):
+    domain = validate_domain_input(data.domain)
+    active_scan = next(
+        (
+            scan for scan in recon_scans.values()
+            if scan["user_id"] == user["id"] and scan["status"] in {"queued", "running"}
+        ),
+        None,
+    )
+    if active_scan:
+        raise HTTPException(status_code=409, detail="A recon scan is already running for this user")
+
+    scan_id = str(uuid.uuid4())
+    scan = {
+        "id": scan_id,
+        "user_id": user["id"],
+        "domain": domain,
+        "status": "queued",
+        "progress": 0,
+        "stage": {"key": "queued", "label": "Queued", "progress": 0},
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "report_id": None,
+        "error": None,
+        "subscribers": set(),
+        "result": {
+            "subdomains": [],
+            "live_hosts": [],
+            "ports": [],
+            "urls": [],
+            "logs": [f"[queue] Recon request accepted for {domain}"],
+        },
+    }
+    recon_scans[scan_id] = scan
+    asyncio.create_task(run_recon_scan(scan_id))
+    return {"scan_id": scan_id, "domain": domain, "status": scan["status"]}
+
+
+@api_router.get("/recon/capabilities")
+async def get_recon_capabilities(user=Depends(get_current_user)):
+    snapshot = get_recon_capability_snapshot()
+    latest_reports = await db.recon_reports.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(6)
+    snapshot["recent_reports"] = latest_reports
+    active_scan = next(
+        (
+            {
+                "id": scan["id"],
+                "domain": scan["domain"],
+                "status": scan["status"],
+                "progress": scan["progress"],
+                "stage": scan["stage"],
+                "started_at": scan["started_at"],
+            }
+            for scan in recon_scans.values()
+            if scan["user_id"] == user["id"] and scan["status"] in {"queued", "running"}
+        ),
+        None,
+    )
+    snapshot["active_scan"] = active_scan
+    return snapshot
+
+
+@api_router.get("/recon/reports")
+async def list_recon_reports(user=Depends(get_current_user)):
+    reports = await db.recon_reports.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(20)
+    return reports
+
+
+@api_router.get("/recon/reports/{report_id}")
+async def get_recon_report(report_id: str, user=Depends(get_current_user)):
+    report = await db.recon_reports.find_one({"id": report_id, "user_id": user["id"]}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Recon report not found")
+    return report
+
 # ── Articles Routes ─────────────────────────────────────
 @api_router.get("/articles")
 async def get_articles(category: str = None):
@@ -1100,6 +1953,38 @@ PLANS = [
     {"id": "free-demo", "name": "Free Demo (7 days)", "price": 0, "currency": "INR", "period": "7 days", "features": ["Access to 3 demo classes", "Preview of all courses", "Limited lab access", "Email support"], "note": f"For gokali.pro subscribers: Send subscription screenshot to {support_email()} for free 7-day demo access."},
 ]
 
+ROADMAP_TASK_TEMPLATES = [
+    {"category": "spatial", "title": "Import live site context", "summary": "Bring terrain, trees, and nearby buildings from real map context into the project scene.", "priority": "high"},
+    {"category": "spatial", "title": "Align model with GIS or KML data", "summary": "Use KML, KMZ, or GIS layers for accurate coordinates, solar studies, and site impact checks.", "priority": "high"},
+    {"category": "software", "title": "Replace static datasets with live APIs", "summary": "Move demo CSV or mocked data to real live data providers wherever possible.", "priority": "high"},
+    {"category": "software", "title": "Use a real cloud database", "summary": "Store app data in MongoDB Atlas or SQL instead of local-only files or temporary state.", "priority": "high"},
+    {"category": "software", "title": "Ship authentication and CRUD", "summary": "Support real user login plus create, read, update, and delete flows that mirror production apps.", "priority": "medium"},
+    {"category": "delivery", "title": "Automate CI and deployment", "summary": "Add GitHub Actions or similar pipeline for tests, builds, and deployments.", "priority": "medium"},
+    {"category": "delivery", "title": "Deploy to a real URL", "summary": "Publish the application to Vercel, AWS, or another host and document the environment setup.", "priority": "high"},
+    {"category": "delivery", "title": "Document inputs and blockers", "summary": "Track API keys, cloud access, deployment credentials, and pending decisions in one place.", "priority": "medium"},
+]
+
+ROADMAP_CATEGORIES = {"spatial", "software", "delivery"}
+ROADMAP_PRIORITIES = {"low", "medium", "high"}
+ROADMAP_STATUSES = {"pending", "in_progress", "done"}
+
+
+def build_roadmap_task(user_id: str, title: str, category: str, summary: str, priority: str = "medium", status: str = "pending", source: str = "custom") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "title": title.strip(),
+        "category": category.strip().lower(),
+        "summary": summary.strip(),
+        "priority": priority.strip().lower(),
+        "status": status.strip().lower(),
+        "source": source,
+        "created_at": now,
+        "updated_at": now,
+        "completed_at": now if status == "done" else None,
+    }
+
 @api_router.get("/plans")
 async def get_plans():
     return PLANS
@@ -1118,6 +2003,88 @@ async def subscribe_plan(data: PlanSubscribe):
         <p><b>Name:</b> {data.name}</p><p><b>Email:</b> {data.email}</p><p><b>Phone:</b> {data.phone}</p></div>"""
         asyncio.create_task(send_email(GMAIL_EMAIL, f"New Subscription: {plan['name']}", html))
     return {"message": f"Subscription request for {plan['name']} submitted! We will contact you shortly.", "subscription_id": sub["id"]}
+
+@api_router.get("/roadmap/tasks")
+async def list_roadmap_tasks(user=Depends(get_current_user)):
+    tasks = await db.roadmap_tasks.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
+    if tasks:
+        return tasks
+
+    seeded_tasks = [
+        build_roadmap_task(
+            user["id"],
+            item["title"],
+            item["category"],
+            item["summary"],
+            priority=item["priority"],
+            source="template",
+        )
+        for item in ROADMAP_TASK_TEMPLATES
+    ]
+    if seeded_tasks:
+        await db.roadmap_tasks.insert_many(seeded_tasks)
+        for task in seeded_tasks:
+            task.pop("_id", None)
+    return seeded_tasks
+
+
+@api_router.post("/roadmap/tasks")
+async def create_roadmap_task(data: RoadmapTaskCreate, user=Depends(get_current_user)):
+    category = data.category.strip().lower()
+    priority = data.priority.strip().lower()
+    if category not in ROADMAP_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Invalid roadmap category")
+    if priority not in ROADMAP_PRIORITIES:
+        raise HTTPException(status_code=400, detail="Invalid roadmap priority")
+    task = build_roadmap_task(user["id"], data.title, category, data.summary, priority=priority, source="custom")
+    await db.roadmap_tasks.insert_one(task)
+    task.pop("_id", None)
+    return task
+
+
+@api_router.patch("/roadmap/tasks/{task_id}")
+async def update_roadmap_task(task_id: str, data: RoadmapTaskUpdate, user=Depends(get_current_user)):
+    task = await db.roadmap_tasks.find_one({"id": task_id, "user_id": user["id"]}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Roadmap task not found")
+
+    updates = {}
+    if data.title is not None:
+        updates["title"] = data.title.strip()
+    if data.summary is not None:
+        updates["summary"] = data.summary.strip()
+    if data.category is not None:
+        category = data.category.strip().lower()
+        if category not in ROADMAP_CATEGORIES:
+            raise HTTPException(status_code=400, detail="Invalid roadmap category")
+        updates["category"] = category
+    if data.priority is not None:
+        priority = data.priority.strip().lower()
+        if priority not in ROADMAP_PRIORITIES:
+            raise HTTPException(status_code=400, detail="Invalid roadmap priority")
+        updates["priority"] = priority
+    if data.status is not None:
+        status = data.status.strip().lower()
+        if status not in ROADMAP_STATUSES:
+            raise HTTPException(status_code=400, detail="Invalid roadmap status")
+        updates["status"] = status
+        updates["completed_at"] = datetime.now(timezone.utc).isoformat() if status == "done" else None
+
+    if not updates:
+        return task
+
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.roadmap_tasks.update_one({"id": task_id, "user_id": user["id"]}, {"$set": updates})
+    task.update(updates)
+    return task
+
+
+@api_router.delete("/roadmap/tasks/{task_id}")
+async def delete_roadmap_task(task_id: str, user=Depends(get_current_user)):
+    result = await db.roadmap_tasks.delete_one({"id": task_id, "user_id": user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Roadmap task not found")
+    return {"message": "Roadmap task deleted"}
 
 # ── Admin Routes ────────────────────────────────────────
 @api_router.get("/admin/users")
@@ -1157,9 +2124,7 @@ async def admin_stats(user=Depends(require_admin)):
 # ── Seed Data ───────────────────────────────────────────
 @app.on_event("startup")
 async def seed_data():
-    if client is None:
-        logger.warning("Startup seed skipped. Database is not configured.")
-        return
+    await ensure_database_backend()
 
     # Seed admin account
     admin_username = os.environ.get('ADMIN_USERNAME', '').strip()
@@ -1195,6 +2160,154 @@ async def seed_data():
         logger.warning("Startup seed skipped because database is unavailable: %s", exc)
 
 # ── WebSocket SSH Terminal ──────────────────────────────
+@app.websocket("/api/ws/recon/{scan_id}")
+async def websocket_recon(websocket: WebSocket, scan_id: str):
+    await websocket.accept()
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.send_json({"type": "error", "message": "Authentication token missing"})
+        await websocket.close(code=4001)
+        return
+
+    try:
+        require_jwt_secret()
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        session = await db.auth_sessions.find_one({"id": payload.get("sid")}, {"_id": 0})
+        if not session or session.get("revoked_at"):
+            await websocket.send_json({"type": "error", "message": "Session expired"})
+            await websocket.close(code=4001)
+            return
+        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+        if not user:
+            await websocket.send_json({"type": "error", "message": "User not found"})
+            await websocket.close(code=4001)
+            return
+    except Exception:
+        await websocket.send_json({"type": "error", "message": "Invalid or expired session token"})
+        await websocket.close(code=4001)
+        return
+
+    scan = recon_scans.get(scan_id)
+    if scan is None:
+        report = await db.recon_reports.find_one({"id": scan_id, "user_id": user["id"]}, {"_id": 0})
+        if report:
+            await websocket.send_json({
+                "type": "snapshot",
+                "scan_id": report["id"],
+                "status": report["status"],
+                "domain": report["domain"],
+                "progress": report.get("progress", 100),
+                "stage": get_recon_stage(report.get("stage", "complete")),
+                "started_at": report.get("created_at"),
+                "finished_at": report.get("finished_at"),
+                "logs": report.get("result", {}).get("logs", [])[-250:],
+                "result": report.get("result", {}),
+                "report_id": report["id"],
+                "error": report.get("error"),
+            })
+            await websocket.close()
+            return
+        await websocket.send_json({"type": "error", "message": "Recon scan not found"})
+        await websocket.close(code=4404)
+        return
+
+    if scan["user_id"] != user["id"]:
+        await websocket.send_json({"type": "error", "message": "Forbidden"})
+        await websocket.close(code=4003)
+        return
+
+    scan["subscribers"].add(websocket)
+    await websocket.send_json(build_recon_snapshot(scan))
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        scan["subscribers"].discard(websocket)
+    except Exception:
+        scan["subscribers"].discard(websocket)
+
+
+# ── WebSocket Docker SSH ────────────────────────────────
+@app.websocket("/api/ws/docker-ssh/{node_id}")
+async def websocket_docker_ssh(websocket: WebSocket, node_id: str):
+    await websocket.accept()
+    user = await authenticate_websocket_user(websocket)
+    if not user:
+        return
+
+    node = DOCKER_SSH_NODES.get(node_id)
+    if not node:
+        await websocket.send_text("\r\nUnknown Docker SSH node.\r\n")
+        await websocket.close(code=4404)
+        return
+
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: ssh.connect(
+                hostname=node["host"],
+                port=node["port"],
+                username=node["username"],
+                password=node["password"],
+                timeout=15,
+                look_for_keys=False,
+                allow_agent=False,
+            ),
+        )
+        channel = ssh.invoke_shell(term='xterm-256color', width=120, height=30)
+        await websocket.send_text(f"\r\n[DockerSSH] Connected to {node['label']} ({node['host']}:{node['port']})\r\n")
+
+        async def read_ssh():
+            loop = asyncio.get_event_loop()
+            while not channel.closed:
+                try:
+                    data = await loop.run_in_executor(None, lambda: channel.recv(4096) if channel.recv_ready() else b'')
+                    if data:
+                        await websocket.send_text(data.decode('utf-8', errors='replace'))
+                    else:
+                        await asyncio.sleep(0.05)
+                except Exception:
+                    break
+
+        read_task = asyncio.create_task(read_ssh())
+        try:
+            while True:
+                data = await websocket.receive_text()
+                if data and not channel.closed:
+                    try:
+                        payload = json.loads(data)
+                    except Exception:
+                        payload = None
+
+                    if isinstance(payload, dict) and payload.get("type") == "resize":
+                        cols = int(payload.get("cols", 120) or 120)
+                        rows = int(payload.get("rows", 30) or 30)
+                        channel.resize_pty(width=max(40, cols), height=max(12, rows))
+                    elif isinstance(payload, dict) and payload.get("type") == "input":
+                        channel.send(payload.get("data", ""))
+                    else:
+                        channel.send(data)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            read_task.cancel()
+            channel.close()
+    except Exception as e:
+        try:
+            await websocket.send_text(f"\r\nDocker SSH Error: {str(e)}\r\n")
+        except Exception:
+            pass
+    finally:
+        ssh.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# ── WebSocket SSH Terminal ──────────────────────────────
 @app.websocket("/api/ws/terminal")
 async def websocket_terminal(websocket: WebSocket):
     if not ssh_terminal_available():
@@ -1204,27 +2317,12 @@ async def websocket_terminal(websocket: WebSocket):
         return
 
     await websocket.accept()
-    token = websocket.query_params.get("token")
-    if not token:
-        await websocket.send_text("\r\nAuthentication token missing.\r\n")
-        await websocket.close(code=4001)
+    user = await authenticate_websocket_user(websocket)
+    if not user:
         return
-    try:
-        require_jwt_secret()
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        session = await db.auth_sessions.find_one({"id": payload.get("sid")}, {"_id": 0})
-        if not session or session.get("revoked_at"):
-            await websocket.send_text("\r\nSession expired.\r\n")
-            await websocket.close(code=4001)
-            return
-        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-        if not user or user.get("role") != "admin":
-            await websocket.send_text("\r\nAdmin access required.\r\n")
-            await websocket.close(code=4003)
-            return
-    except Exception:
-        await websocket.send_text("\r\nInvalid or expired session token.\r\n")
-        await websocket.close(code=4001)
+    if user.get("role") != "admin":
+        await websocket.send_text("\r\nAdmin access required.\r\n")
+        await websocket.close(code=4003)
         return
 
     if not SSH_HOST or not SSH_PASSWORD:
@@ -1286,6 +2384,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if (FRONTEND_BUILD_DIR / "static").exists():
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_BUILD_DIR / "static")), name="frontend-static")
+
+
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    if not FRONTEND_BUILD_DIR.exists():
+        raise HTTPException(status_code=404, detail="Frontend build not found")
+
+    candidate = (FRONTEND_BUILD_DIR / full_path).resolve()
+    try:
+        candidate.relative_to(FRONTEND_BUILD_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if full_path and candidate.exists() and candidate.is_file():
+        return FileResponse(candidate)
+
+    index_file = FRONTEND_BUILD_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="Frontend entrypoint not found")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

@@ -1,19 +1,14 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { AuthProvider } from "@/context/AuthContext";
 import { Toaster } from "@/components/ui/sonner";
 import Navbar from "@/components/Navbar";
-import Landing from "@/pages/Landing";
 import Auth from "@/pages/Auth";
+import DockerSSH from "@/pages/DockerSSH";
 import Tools from "@/pages/Tools";
 import ToolExplorer from "@/pages/ToolExplorer";
-import LearningHub from "@/pages/LearningHub";
-import Sandbox from "@/pages/Sandbox";
-import Dashboard from "@/pages/Dashboard";
-import Plans from "@/pages/Plans";
 import ForgotPassword from "@/pages/ForgotPassword";
-import AdminPanel from "@/pages/AdminPanel";
 
 function AnimatedRoutes() {
   const location = useLocation();
@@ -29,18 +24,15 @@ function AnimatedRoutes() {
         transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
       >
         <Routes location={location}>
-          <Route path="/" element={<Landing />} />
+          <Route path="/" element={<Navigate to="/tools" replace />} />
           <Route path="/auth" element={<Auth />} />
+          <Route path="/docker-ssh" element={<DockerSSH />} />
           <Route path="/tools" element={<Tools />} />
           <Route path="/tool-explorer" element={<ToolExplorer />} />
-          <Route path="/learn" element={<LearningHub />} />
-          <Route path="/sandbox" element={<Sandbox />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/plans" element={<Plans />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password/:token" element={<ForgotPassword />} />
           <Route path="/verify-email/:token" element={<ForgotPassword />} />
-          <Route path="/admin" element={<AdminPanel />} />
+          <Route path="*" element={<Navigate to="/tools" replace />} />
         </Routes>
       </motion.div>
     </AnimatePresence>
