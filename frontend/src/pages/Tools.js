@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
-import { getWebSocketBase } from '@/lib/config';
+import { getWebSocketBase, IS_VERCEL } from '@/lib/config';
 
 const STAGES = [
   { key: 'queued', label: 'Queued', progress: 0 },
@@ -232,6 +232,11 @@ export default function Tools() {
   };
 
   const startRecon = async () => {
+    if (IS_VERCEL) {
+      toast.error('Live recon execution is disabled on Vercel. Use Tool Explorer or a full backend host for active scans.');
+      setWorkspaceTab('options');
+      return;
+    }
     if (!domain.trim()) {
       toast.error('Enter a domain first');
       return;
@@ -322,6 +327,11 @@ export default function Tools() {
               <p className="mt-3 max-w-2xl text-sm leading-7 text-[#8ea3b8]">
                 One workspace only: run recon on the left, inspect results on the right, and manage real recon coverage from the options tab.
               </p>
+              {IS_VERCEL && (
+                <div className="mt-4 rounded-2xl border border-[#ffd166]/20 bg-[#ffd166]/[0.08] px-4 py-3 text-sm leading-6 text-[#ffe6a3]">
+                  Vercel mode active: auth, static UI, and API reads are ready. Live recon execution and websocket streaming need a full backend host.
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap gap-3">
@@ -504,9 +514,9 @@ export default function Tools() {
                 </div>
 
                 <div className="rounded-[22px] border border-white/8 bg-black/25 p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <ShieldAlert className="h-4 w-4 text-[#00f7ff]" />
-                    <div className="font-['Orbitron'] text-sm uppercase tracking-[0.2em] text-white">Engine Readiness</div>
+                <div className="mb-3 flex items-center gap-2">
+                  <ShieldAlert className="h-4 w-4 text-[#00f7ff]" />
+                  <div className="font-['Orbitron'] text-sm uppercase tracking-[0.2em] text-white">Engine Readiness</div>
                     <Badge className="ml-auto border-0 bg-white/5 text-[#8aa3bc]">
                       {loadingCapabilities ? 'loading' : `${readyToolCount}/${totalToolCount || 6} online`}
                     </Badge>
@@ -514,6 +524,12 @@ export default function Tools() {
                   <div className="mb-4 rounded-2xl border border-white/8 bg-white/[0.02] p-4 text-sm text-[#8ea3b8]">
                     Real recon needs the native binaries on the backend host. Missing tools are why scans return empty results.
                   </div>
+                  {IS_VERCEL && (
+                    <div className="mb-4 rounded-2xl border border-[#ffd166]/20 bg-[#ffd166]/[0.08] p-4 text-sm leading-7 text-[#ffe6a3]">
+                      This Vercel deployment is optimized for product UI and account flows. For active recon binaries like `subfinder`, `httpx`, `nmap`, `gau`,
+                      and `katana`, point the frontend to a dedicated Linux backend or deploy the backend separately.
+                    </div>
+                  )}
                   <div className="space-y-3">
                     {(capabilities?.tools || []).map((tool) => (
                       <div key={tool.key} className="rounded-2xl border border-white/8 bg-white/[0.02] p-4">

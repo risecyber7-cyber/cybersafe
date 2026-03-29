@@ -2,10 +2,11 @@ import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { BookOpenText, Boxes, LogOut, SearchCode, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { IS_VERCEL } from '@/lib/config';
 
 const NAV_LINKS = [
   { path: '/tools', label: 'Tools', icon: Wrench },
-  { path: '/docker-ssh', label: 'Docker SSH', icon: Boxes },
+  ...(IS_VERCEL ? [] : [{ path: '/docker-ssh', label: 'Docker SSH', icon: Boxes }]),
   { path: '/tool-explorer', label: 'Tool Explorer', icon: SearchCode },
 ];
 

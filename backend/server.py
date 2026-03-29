@@ -275,6 +275,10 @@ def ssh_terminal_available() -> bool:
     return not bool(os.environ.get("VERCEL"))
 
 
+def vercel_runtime() -> bool:
+    return bool(os.environ.get("VERCEL"))
+
+
 def frontend_url() -> str:
     if FRONTEND_URL:
         return FRONTEND_URL
@@ -902,6 +906,12 @@ def get_recon_capability_snapshot() -> dict:
         "total_count": len(RECON_TOOL_SPECS),
         "stage_timeout_seconds": RECON_STAGE_TIMEOUT,
         "total_timeout_seconds": RECON_TOTAL_TIMEOUT,
+        "platform": {
+            "vercel": vercel_runtime(),
+            "realtime_supported": not vercel_runtime(),
+            "ssh_supported": ssh_terminal_available(),
+            "recon_execution_supported": not vercel_runtime(),
+        },
     }
 
 
@@ -1736,6 +1746,8 @@ async def hash_generator(data: ToolInput):
 
 @api_router.post("/recon/start")
 async def start_recon_scan(data: ReconStartRequest, user=Depends(get_current_user)):
+    if vercel_runtime():
+        raise HTTPException(status_code=503, detail="Live recon execution is disabled on Vercel serverless deployments")
     domain = validate_domain_input(data.domain)
     active_scan = next(
         (
@@ -2162,6 +2174,11 @@ async def seed_data():
 # ── WebSocket SSH Terminal ──────────────────────────────
 @app.websocket("/api/ws/recon/{scan_id}")
 async def websocket_recon(websocket: WebSocket, scan_id: str):
+    if vercel_runtime():
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "message": "Realtime recon sockets are disabled on Vercel"})
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     token = websocket.query_params.get("token")
     if not token:
@@ -2230,6 +2247,11 @@ async def websocket_recon(websocket: WebSocket, scan_id: str):
 # ── WebSocket Docker SSH ────────────────────────────────
 @app.websocket("/api/ws/docker-ssh/{node_id}")
 async def websocket_docker_ssh(websocket: WebSocket, node_id: str):
+    if vercel_runtime():
+        await websocket.accept()
+        await websocket.send_text("\r\nDocker SSH is disabled on Vercel deployments.\r\n")
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     user = await authenticate_websocket_user(websocket)
     if not user:

@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
-import { BACKEND_URL, getWebSocketBase } from '@/lib/config';
+import { BACKEND_URL, getWebSocketBase, IS_VERCEL } from '@/lib/config';
 
 const NODE_SLOTS = [
   {
@@ -294,6 +294,11 @@ export default function DockerSSH() {
               <p className="mt-3 max-w-2xl text-sm leading-7 text-[#8ea3b8]">
                 Pick a node, auto-copy its root password, then open the shell directly as root from the terminal panel.
               </p>
+              {IS_VERCEL && (
+                <div className="mt-4 rounded-2xl border border-[#ffd166]/20 bg-[#ffd166]/[0.08] px-4 py-3 text-sm leading-6 text-[#ffe6a3]">
+                  Docker SSH and embedded terminal sessions are disabled on Vercel. Use a persistent backend host for live shell access.
+                </div>
+              )}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
@@ -408,7 +413,13 @@ export default function DockerSSH() {
             transition={{ duration: 0.35, delay: 0.08 }}
             className="rounded-[24px] border border-[#00f7ff]/10 bg-[linear-gradient(180deg,rgba(2,7,14,0.97),rgba(1,4,8,0.96))] p-4 sm:rounded-[28px] sm:p-5"
           >
-            <DockerTerminal token={token} selectedNode={selectedNode} />
+            {IS_VERCEL ? (
+              <div className="flex min-h-[420px] items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-black/20 p-6 text-center text-sm leading-7 text-[#8ea3b8]">
+                This page is deploy-safe on Vercel, but live websocket shell sessions are intentionally disabled in serverless mode.
+              </div>
+            ) : (
+              <DockerTerminal token={token} selectedNode={selectedNode} />
+            )}
           </motion.section>
         </div>
       </div>
